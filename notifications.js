@@ -1,67 +1,28 @@
-const express = require('express');
-const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
-const { ownerExpiryState, notify, LEADS_MODULE_ENABLED } = require('../utils/helpers');
-
-const router = express.Router();
-router.use(requireAuth);
-
-const LAUNCH_DATE = '2026-11-01';
-function previousDateStr(ds) {
-  const [y, m, d] = ds.split('-').map(Number);
-  const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() - 1);
-  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+/* =========================================================
+   NOTIFICATIONS
+   ========================================================= */
+const NOTIF_ICON = {fresh_lead:'leads', unread_requests:'requests', owner_refresh:'owners', reminder:'clock', system:'notif', daily_report_missing:'calendar'};
+function renderNotificationsPage(u){
+  const list = myNotifications(u);
+  return `<div class="card">${list.length? list.map(n=>`
+    <div class="notif-row" data-notif="${n.id}" style="display:flex; gap:12px; align-items:flex-start; padding:13px 16px; border-bottom:1px solid var(--border); cursor:${n.link?'pointer':'default'}; ${n.read?'opacity:.6;':''}">
+      <div style="width:32px;height:32px;border-radius:50%; background:var(--brand-tint); color:var(--brand-dark); display:flex;align-items:center;justify-content:center; flex-shrink:0;">${ic(NOTIF_ICON[n.type]||'notif')}</div>
+      <div style="flex:1;"><div style="font-size:13px; font-weight:${n.read?'500':'700'};">${esc(n.text)}</div><div style="font-size:11px; color:var(--text-faint);">${fmtDateTime(n.at)}</div></div>
+      ${!n.read?`<button class="btn btn-sm btn-ghost" data-readnotif="${n.id}">Mark read</button>`:''}
+    </div>`).join('') : `<div class="empty-state">${ic('notif')}<div>No notifications yet.</div></div>`}
+  </div>`;
 }
+AFTER_RENDER.notifications = function(u){
+  document.querySelectorAll('[data-readnotif]').forEach(b=> b.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    const n = DB.notifications.find(x=>x.id===b.dataset.readnotif); n.read=true; persist(); renderPageInto(u);
+  }));
+  document.querySelectorAll('.notif-row').forEach(el=> el.addEventListener('click', ()=>{
+    const n = DB.notifications.find(x=>x.id===el.dataset.notif);
+    if(!n) return;
+    n.read = true; persist();
+    if(n.meta && n.meta.date) session._reportDate = n.meta.date;
+    if(n.link) go(n.link); else renderPageInto(u);
+  }));
+};
 
-// Ensures notifications exist for the current state of this user's owner-relationship
-// refresh warnings and missing-Daily-Report reminder. Safe to call often — dedup_key stops
-// repeats. Leads notifications are gated behind LEADS_MODULE_ENABLED (Phase 2 / inactive).
-function syncNotifications(user) {
-  if (user.role === 'salesperson') {
-    if (LEADS_MODULE_ENABLED) {
-      const freshLeads = db.prepare('SELECT * FROM leads WHERE salesperson_id = ? AND fresh = 1').all(user.id);
-      freshLeads.forEach(l => notify(user.id, 'fresh_lead', `You have a fresh lead: ${l.name}`, 'leads', `fresh_${l.id}`));
-
-      const due = db.prepare(`SELECT r.* FROM lead_reminders r JOIN leads l ON l.id = r.lead_id
-        WHERE l.salesperson_id = ? AND r.done = 0 AND r.due_date <= ?`).all(user.id, Date.now());
-      due.forEach(r => notify(user.id, 'reminder', `Reminder due: ${r.text}`, 'leads', `reminder_${r.id}`));
-    }
-
-    // Owner refresh reminders are PER Owner<->Unit relationship, each with its own 30-day cycle.
-    const rels = db.prepare(`SELECT ou.*, o.name as owner_name FROM owner_units ou JOIN owners o ON o.id = ou.owner_id
-      WHERE ou.salesperson_id = ? AND ou.status = 'active'`).all(user.id);
-    rels.forEach(r => {
-      const state = ownerExpiryState(r.last_update_at);
-      const bucket = Math.floor(r.last_update_at / 86400000);
-      if (state === 'soon') notify(user.id, 'owner_refresh', `Owner ${r.owner_name} needs an update soon`, 'owners', `relsoon_${r.id}_${bucket}`);
-      if (state === 'expired') notify(user.id, 'owner_refresh', `Owner ${r.owner_name} has expired and may become available to others`, 'owners', `relexp_${r.id}_${bucket}`);
-    });
-
-    // Daily Performance Report — previous day missing/incomplete (stays editable, never locks).
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = previousDateStr(today);
-    if (today >= LAUNCH_DATE && yesterday >= LAUNCH_DATE) {
-      const row = db.prepare('SELECT * FROM daily_reports WHERE salesperson_id = ? AND date = ?').get(user.id, yesterday);
-      if (!row || row.status !== 'completed') {
-        notify(user.id, 'daily_report_missing', `You didn't complete yesterday's Daily Report (${yesterday})`, 'reports', `drmiss_${user.id}_${yesterday}`, { date: yesterday });
-      }
-    }
-  }
-  if (['junioradmin', 'senioradmin', 'headadmin'].includes(user.role)) {
-    const pending = db.prepare("SELECT * FROM owner_transfers WHERE status = 'pending'").all();
-    pending.forEach(t => notify(user.id, 'system', 'An owner transfer/claim request is awaiting your approval', 'admin', `transfer_${t.id}`));
-  }
-}
-
-router.get('/', (req, res) => {
-  syncNotifications(req.user);
-  const rows = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY at DESC').all(req.user.id);
-  res.json(rows.map(r => ({ ...r, meta: r.meta_json ? JSON.parse(r.meta_json) : null })));
-});
-
-router.patch('/:id/read', (req, res) => {
-  db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
-  res.json({ ok: true });
-});
-
-module.exports = router;

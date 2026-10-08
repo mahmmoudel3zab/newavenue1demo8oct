@@ -10,10 +10,11 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-
 <div id="app"></div>
 <div class="toast-wrap" id="toastWrap"></div>
 
+<!-- Loaded in dependency order. These are classic (non-module) scripts, so they
+     all share one global scope, exactly like the original single-file version. -->
 <script src="data.js"></script>
 <script src="icons.js"></script>
 <script src="session.js"></script>
@@ -30,6 +31,5 @@
 <script src="admin.js"></script>
 <script src="profile.js"></script>
 <script src="app.js"></script>
-
 </body>
 </html>

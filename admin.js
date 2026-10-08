@@ -1,96 +1,94 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
-const { requireAdmin } = require('../middleware/rbac');
-const { newId, now, audit, notify } = require('../utils/helpers');
+/* =========================================================
+   ADMIN
+   ========================================================= */
+function renderAdminPage(u){
+  if(!isAdmin(u)) return `<div class="empty-state">${ic('admin')}<div>Access denied — administrative permissions required.</div></div>`;
+  const tab = session._adminTab || 'users';
+  const tabs = [['users','Users'],['units','Pending Units'],['transfers','Owner Transfers'],['audit','Audit Log']];
+  let body = '';
+  if(tab==='users') body = renderAdminUsers(u);
+  else if(tab==='units') body = renderAdminUnits(u);
+  else if(tab==='transfers') body = renderAdminTransfers(u);
+  else body = renderAdminAudit(u);
+  return `
+  <div style="margin-bottom:10px;"><span class="badge badge-brand">${ROLE_LABELS[u.role]}</span></div>
+  <div class="tabs">${tabs.map(([k,l])=>`<button class="tab-btn ${tab===k?'active':''}" data-admintab="${k}">${l}</button>`).join('')}</div>
+  ${body}`;
+}
+function renderAdminUsers(u){
+  const canChangeTeam = u.role==='senioradmin' || u.role==='headadmin';
+  return `<div class="card"><table><thead><tr><th>Name</th><th>Role</th><th>Team</th><th>Manager</th>${canChangeTeam?'<th>Action</th>':''}</tr></thead><tbody>
+  ${DB.users.map(x=>{
+    const mgr = DB.users.find(m=>m.id===x.managerId);
+    return `<tr><td style="font-weight:700;">${esc(x.name)}</td><td>${ROLE_LABELS[x.role]}</td><td>${x.team?`<span class="team-pill ${x.team}">${x.team}</span>`:'—'}</td><td>${esc(mgr?mgr.name:'—')}</td>
+    ${canChangeTeam?`<td>${x.team?`<button class="btn btn-sm" data-switchteam="${x.id}">Switch to ${x.team==='residential'?'Commercial':'Residential'}</button>`:'—'}</td>`:''}</tr>`;
+  }).join('')}
+  </tbody></table></div>`;
+}
+function renderAdminUnits(u){
+  const pending = DB.units.filter(x=>x.pending);
+  return `<div class="card">${pending.length? pending.map(un=>{
+    const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
+    return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border);">
+      <div style="flex:1;"><div style="font-weight:700; font-size:13px;">${esc(un.compound)} · ${esc(un.unitType)}</div><div style="font-size:11.5px; color:var(--text-faint);">${fmtMoney(un.totalPrice)} · by ${esc(sp?sp.name:'—')} · ${esc(un.team)}</div></div>
+      <button class="btn btn-sm btn-primary" data-approveunit="${un.id}">Approve</button>
+    </div>`;
+  }).join('') : emptyRow('No units pending review.')}</div>`;
+}
+function renderAdminTransfers(u){
+  const pending = DB.transfers.filter(t=>t.status==='pending');
+  return `<div class="card">${pending.length? pending.map(t=>{
+    const o = DB.owners.find(x=>x.id===t.ownerId);
+    const unit = DB.units.find(x=>x.id===t.unitId);
+    const from = DB.users.find(x=>x.id===t.fromSalespersonId);
+    const to = DB.users.find(x=>x.id===t.toSalespersonId);
+    const kind = t.type==='claim' ? 'Claim (owner already exists with another salesperson)' : 'Transfer (expired relationship)';
+    return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border);">
+      <div style="flex:1;"><div style="font-weight:700; font-size:13px;">${esc(o?o.name:'—')} ${unit?'· '+esc(unitLabel(unit)):''}</div><div style="font-size:11.5px; color:var(--text-faint);">${kind} · ${esc(from?from.name:'—')} → ${esc(to?to.name:'—')} · requested ${fmtDateTime(t.at)}</div></div>
+      <button class="btn btn-sm btn-danger" data-rejecttransfer="${t.id}">Reject</button>
+      <button class="btn btn-sm btn-primary" data-approvetransfer="${t.id}">Approve</button>
+    </div>`;
+  }).join('') : emptyRow('No pending owner transfer/claim requests.')}</div>`;
+}
+function renderAdminAudit(u){
+  return `<div class="card">${DB.auditLog.length? DB.auditLog.slice(0,60).map(l=>{
+    const actor = DB.users.find(x=>x.id===l.actor);
+    return `<div style="padding:10px 16px; border-bottom:1px solid var(--border); font-size:12.5px;"><b>${esc(actor?actor.name:l.actor)}</b> — ${l.action.replace(/_/g,' ')} <span style="color:var(--text-faint);">· ${fmtDateTime(l.at)}</span></div>`;
+  }).join('') : emptyRow('No audit history yet.')}</div>`;
+}
+AFTER_RENDER.admin = function(u){
+  document.querySelectorAll('[data-admintab]').forEach(b=> b.addEventListener('click', ()=>{ session._adminTab=b.dataset.admintab; renderPageInto(u); }));
+  document.querySelectorAll('[data-switchteam]').forEach(b=> b.addEventListener('click', ()=>{
+    const x = DB.users.find(z=>z.id===b.dataset.switchteam);
+    const oldTeam = x.team; x.team = x.team==='residential'?'commercial':'residential';
+    log(u.id,'team_change',{userId:x.id, from:oldTeam, to:x.team});
+    persist(); toast(x.name+' moved to '+x.team); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', ()=>{
+    const un = DB.units.find(x=>x.id===b.dataset.approveunit); un.pending=false;
+    log(u.id,'unit_approved',{unitId:un.id}); persist(); toast('Unit approved'); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-approvetransfer]').forEach(b=> b.addEventListener('click', ()=>{
+    const t = DB.transfers.find(x=>x.id===b.dataset.approvetransfer); t.status='approved'; t.decidedAt=now(); t.decidedBy=u.id;
+    if(t.type==='claim'){
+      // Creates a NEW relationship for the requesting salesperson on that specific unit only —
+      // it never duplicates the owner record and never touches that owner's other relationships.
+      DB.ownerUnits.push(makeOwnerUnitRel(t.ownerId, t.unitId, t.toSalespersonId, 0));
+      log(u.id,'owner_claim_approved',{ownerId:t.ownerId, unitId:t.unitId, to:t.toSalespersonId});
+    } else {
+      // Transfer applies ONLY to this specific owner-unit relationship, not the owner's other units.
+      const rel = DB.ownerUnits.find(x=>x.id===t.ownerUnitId);
+      if(rel){ rel.salespersonId = t.toSalespersonId; rel.lastUpdateAt=now(); rel.nextUpdateAt=rel.lastUpdateAt+30*86400000; rel.reminderAt=rel.lastUpdateAt+25*86400000; rel.status='active'; }
+      log(u.id,'owner_transfer_approved',{ownerUnitId:t.ownerUnitId, to:t.toSalespersonId});
+    }
+    notify(t.toSalespersonId,'system','Your owner request was approved','owners');
+    persist(); toast('Request approved'); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-rejecttransfer]').forEach(b=> b.addEventListener('click', ()=>{
+    const t = DB.transfers.find(x=>x.id===b.dataset.rejecttransfer); t.status='rejected'; t.decidedAt=now(); t.decidedBy=u.id;
+    log(u.id,'owner_transfer_rejected',{transferId:t.id});
+    notify(t.toSalespersonId,'system','Your owner request was rejected','owners');
+    persist(); toast('Request rejected'); renderPageInto(u);
+  }));
+};
 
-const router = express.Router();
-router.use(requireAuth);
-
-// --- Pending units --------------------------------------------------------
-router.get('/units/pending', requireAdmin('junioradmin'), (req, res) => {
-  res.json(db.prepare('SELECT * FROM units WHERE pending = 1').all());
-});
-
-router.post('/units/:id/approve', requireAdmin('junioradmin'), (req, res) => {
-  db.prepare('UPDATE units SET pending = 0 WHERE id = ?').run(req.params.id);
-  audit(req.user.id, 'unit_approved', { unitId: req.params.id });
-  res.json({ ok: true });
-});
-
-// --- Owner transfer requests (require explicit admin approval; never silent) ---
-router.get('/owner-transfers', requireAdmin('senioradmin'), (req, res) => {
-  const pending = db.prepare("SELECT * FROM owner_transfers WHERE status = 'pending'").all();
-  res.json(pending);
-});
-
-router.post('/owner-transfers/:id/approve', requireAdmin('senioradmin'), (req, res) => {
-  const t = db.prepare('SELECT * FROM owner_transfers WHERE id = ?').get(req.params.id);
-  if (!t || t.status !== 'pending') return res.status(404).json({ error: 'No pending transfer with that id' });
-  const at = now();
-  db.prepare("UPDATE owner_transfers SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ?")
-    .run(at, req.user.id, t.id);
-  if (t.type === 'claim') {
-    // Creates a NEW relationship for the requester on that specific unit only — never
-    // duplicates the owner record, never touches that owner's other relationships.
-    const { newId } = require('../utils/helpers');
-    const id = newId('ou');
-    db.prepare(`INSERT INTO owner_units (id, owner_id, unit_id, salesperson_id, status, last_update_at, next_update_at, reminder_at, created_at)
-      VALUES (?,?,?,?,'active',?,?,?,?)`).run(id, t.owner_id, t.unit_id, t.to_salesperson_id, at, at + 30 * 86400000, at + 25 * 86400000, at);
-    audit(req.user.id, 'owner_claim_approved', { transferId: t.id, ownerId: t.owner_id, unitId: t.unit_id });
-  } else {
-    // Transfer applies ONLY to this specific owner-unit relationship, not the owner's other units.
-    db.prepare('UPDATE owner_units SET salesperson_id = ?, last_update_at = ?, next_update_at = ?, reminder_at = ? WHERE id = ?')
-      .run(t.to_salesperson_id, at, at + 30 * 86400000, at + 25 * 86400000, t.owner_unit_id);
-    audit(req.user.id, 'owner_transfer_approved', { transferId: t.id, ownerUnitId: t.owner_unit_id });
-  }
-  notify(t.to_salesperson_id, 'system', 'Your owner request was approved', 'owners', `xferok_${t.id}`);
-  res.json({ ok: true });
-});
-
-router.post('/owner-transfers/:id/reject', requireAdmin('senioradmin'), (req, res) => {
-  const t = db.prepare('SELECT * FROM owner_transfers WHERE id = ?').get(req.params.id);
-  if (!t || t.status !== 'pending') return res.status(404).json({ error: 'No pending transfer with that id' });
-  db.prepare("UPDATE owner_transfers SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ?")
-    .run(now(), req.user.id, t.id);
-  audit(req.user.id, 'owner_transfer_rejected', { transferId: t.id });
-  notify(t.to_salesperson_id, 'system', 'Your owner request was rejected', 'owners', `xferno_${t.id}`);
-  res.json({ ok: true });
-});
-
-// --- Team reassignment (Residential <-> Commercial) — senior admin and above ---
-router.post('/users/:id/team', requireAdmin('senioradmin'), (req, res) => {
-  const { team } = req.body || {};
-  if (!['residential', 'commercial'].includes(team)) return res.status(400).json({ error: 'team must be residential or commercial' });
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target) return res.status(404).json({ error: 'User not found' });
-  db.prepare('UPDATE users SET team = ? WHERE id = ?').run(team, target.id);
-  audit(req.user.id, 'team_change', { userId: target.id, from: target.team, to: team });
-  res.json({ ok: true });
-});
-
-// --- User & role management — head admin only ---
-router.post('/users', requireAdmin('headadmin'), (req, res) => {
-  const b = req.body || {};
-  const id = newId('user');
-  const hash = bcrypt.hashSync(b.password || 'ChangeMe123!', 10);
-  db.prepare(`INSERT INTO users (id, name, email, password_hash, role, team, manager_id, avatar_color, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(id, b.name, b.email.toLowerCase(), hash, b.role, b.team || null, b.managerId || null, b.avatarColor || '#8A6A3B', now());
-  audit(req.user.id, 'user_created', { userId: id, role: b.role });
-  res.status(201).json({ id });
-});
-
-router.patch('/users/:id/role', requireAdmin('headadmin'), (req, res) => {
-  const { role } = req.body || {};
-  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
-  audit(req.user.id, 'user_role_changed', { userId: req.params.id, role });
-  res.json({ ok: true });
-});
-
-// --- Audit log ---
-router.get('/audit-log', requireAdmin('junioradmin'), (req, res) => {
-  res.json(db.prepare('SELECT * FROM audit_log ORDER BY at DESC LIMIT 200').all());
-});
-
-module.exports = router;

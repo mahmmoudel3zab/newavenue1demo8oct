@@ -1,59 +1,75 @@
-const express = require('express');
-const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
-const { resolveTeam } = require('../middleware/rbac');
-const { newId, now } = require('../utils/helpers');
-
-const router = express.Router();
-router.use(requireAuth, resolveTeam);
-
-function withReplies(request) {
-  request.replies = db.prepare('SELECT * FROM request_replies WHERE request_id = ? ORDER BY at ASC').all(request.id);
-  return request;
+/* =========================================================
+   REQUESTS
+   ========================================================= */
+function renderRequestsPage(u){
+  const tk = myTeamKey(u);
+  const list = requestsFor(tk);
+  const pos = DB.readPositions[u.id];
+  const idx = pos ? list.findIndex(r=>r.id===pos) : -1;
+  const unreadStart = idx+1;
+  const hasUnread = unreadStart < list.length;
+  return `
+  <div class="card" style="display:flex; flex-direction:column; height:calc(100vh - 160px); max-height:720px;">
+    <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
+      <div><div style="font-weight:800; font-size:14px;">${tk[0].toUpperCase()+tk.slice(1)} Requests</div><div style="font-size:11.5px; color:var(--text-faint);">Shared feed for the whole team</div></div>
+      ${hasUnread?`<button class="btn btn-sm btn-primary" id="jumpUnreadBtn">${list.length-unreadStart} new ↓</button>`:`<span class="badge badge-success">All caught up</span>`}
+    </div>
+    <div id="reqScroll" style="flex:1; overflow-y:auto; padding:14px 16px;">
+      ${list.map((r,i)=>{
+        const showDivider = i===unreadStart && hasUnread;
+        return (showDivider? `<div id="unreadDivider" style="text-align:center; margin:14px 0;"><span class="badge badge-fresh">New requests</span></div>`:'') + requestBubble(r);
+      }).join('') || emptyRow('No requests yet.')}
+    </div>
+    <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px;">
+      <input id="reqInput" placeholder="Write a request or share inventory news…">
+      <button class="btn btn-primary" id="reqSendBtn">Send</button>
+    </div>
+  </div>`;
 }
+function requestBubble(r){
+  const a = DB.users.find(x=>x.id===r.authorId);
+  return `<div style="margin-bottom:14px;">
+    <div style="display:flex; gap:9px;">
+      <span class="avatar" style="background:${a?a.avatar:'#999'}; width:30px;height:30px; font-size:11px; flex-shrink:0;">${a?initials(a.name):'?'}</span>
+      <div style="flex:1;">
+        <div style="display:flex; gap:8px; align-items:baseline;"><span style="font-weight:700; font-size:12.5px;">${esc(a?a.name:'Unknown')}</span><span style="font-size:10.5px; color:var(--text-faint);">${fmtDateTime(r.at)}</span></div>
+        <div style="font-size:13px; margin-top:2px; background:var(--surface-2); display:inline-block; padding:8px 11px; border-radius:10px;">${esc(r.text)}</div>
+        ${r.replies.map(rp=>{
+          const ra = DB.users.find(x=>x.id===rp.authorId);
+          return `<div style="display:flex; gap:8px; margin-top:6px; margin-left:14px;">
+            <span class="avatar" style="background:${ra?ra.avatar:'#999'}; width:22px;height:22px; font-size:9.5px; flex-shrink:0;">${ra?initials(ra.name):'?'}</span>
+            <div><div style="font-size:11px; font-weight:700;">${esc(ra?ra.name:'?')} <span style="font-weight:400; color:var(--text-faint);">${fmtDateTime(rp.at)}</span></div>
+            <div style="font-size:12.5px; background:var(--surface-2); display:inline-block; padding:6px 10px; border-radius:8px; margin-top:2px;">${esc(rp.text)}</div></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+AFTER_RENDER.requests = function(u){
+  const tk = myTeamKey(u);
+  const list = requestsFor(tk);
+  const scroll = document.getElementById('reqScroll');
+  const markRead = ()=>{ if(list.length){ DB.readPositions[u.id] = list[list.length-1].id; persist(); } };
+  if(scroll) scroll.scrollTop = scroll.scrollHeight; // jump to latest/unread area
+  const jump = document.getElementById('jumpUnreadBtn');
+  if(jump) jump.addEventListener('click', ()=>{
+    const div = document.getElementById('unreadDivider'); if(div) div.scrollIntoView({behavior:'smooth', block:'center'});
+    markRead(); setTimeout(()=>render(),600);
+  });
+  const sendBtn = document.getElementById('reqSendBtn');
+  const input = document.getElementById('reqInput');
+  const send = ()=>{
+    const txt = input.value.trim(); if(!txt) return;
+    DB.requests[tk].push({id:uid('r'), team:tk, authorId:u.id, text:txt, at:now(), replies:[]});
+    markRead(); persist(); render(); go('requests');
+    toast('Request posted');
+  };
+  if(sendBtn) sendBtn.addEventListener('click', send);
+  if(input) input.addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
+  // mark read when the page is viewed and user scrolls near bottom
+  if(scroll) scroll.addEventListener('scroll', ()=>{
+    if(scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 20) markRead();
+  });
+};
 
-// GET /api/requests?team=...
-// Returns the whole feed plus this user's personal read position for that feed —
-// each salesperson has their own position, never a single shared/global one.
-router.get('/', (req, res) => {
-  const list = db.prepare('SELECT * FROM requests WHERE team = ? ORDER BY at ASC').all(req.scopeTeam).map(withReplies);
-  const posRow = db.prepare('SELECT last_read_request_id FROM request_read_positions WHERE user_id = ? AND team = ?')
-    .get(req.user.id, req.scopeTeam);
-  const lastReadId = posRow ? posRow.last_read_request_id : null;
-  const idx = lastReadId ? list.findIndex(r => r.id === lastReadId) : -1;
-  const unreadCount = idx === -1 ? list.length : list.length - 1 - idx;
-  res.json({ requests: list, lastReadRequestId: lastReadId, unreadCount });
-});
-
-// POST /api/requests  { text }
-router.post('/', (req, res) => {
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
-  const id = newId('req');
-  db.prepare('INSERT INTO requests (id, team, author_id, text, at) VALUES (?,?,?,?,?)')
-    .run(id, req.scopeTeam, req.user.id, text.trim(), now());
-  res.status(201).json(withReplies(db.prepare('SELECT * FROM requests WHERE id = ?').get(id)));
-});
-
-// POST /api/requests/:id/replies  { text }
-router.post('/:id/replies', (req, res) => {
-  const parent = db.prepare('SELECT * FROM requests WHERE id = ?').get(req.params.id);
-  if (!parent || parent.team !== req.scopeTeam) return res.status(404).json({ error: 'Request not found' });
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
-  db.prepare('INSERT INTO request_replies (id, request_id, author_id, text, at) VALUES (?,?,?,?,?)')
-    .run(newId('reply'), parent.id, req.user.id, text.trim(), now());
-  res.status(201).json(withReplies(db.prepare('SELECT * FROM requests WHERE id = ?').get(parent.id)));
-});
-
-// PUT /api/requests/read-position  { requestId }
-// Updates ONLY this user's personal position for this team's feed.
-router.put('/read-position', (req, res) => {
-  const { requestId } = req.body || {};
-  db.prepare(`INSERT INTO request_read_positions (user_id, team, last_read_request_id) VALUES (?,?,?)
-    ON CONFLICT(user_id, team) DO UPDATE SET last_read_request_id = excluded.last_read_request_id`)
-    .run(req.user.id, req.scopeTeam, requestId);
-  res.json({ ok: true });
-});
-
-module.exports = router;
