@@ -4,6 +4,16 @@
 function deliveryLabel(y){ return y===0?'Immediate': y===1?'Within 1 year': y+' years'; }
 function deliveryBucket(y){ return y===0?'Immediate': y<=1?'1y': y<=2?'2y':'4y'; }
 
+// Bedroom/bathroom "N or more" buckets: the top option in each list (6 bedrooms, 5 bathrooms)
+// means "N or more", not exactly N — so the filter isn't artificially capped below whatever the
+// underlying unit data actually supports (buildUnits() can generate up to 5 bedrooms / 5 bathrooms).
+function matchesCountFilter(selected, value, maxExactOption){
+  if(!selected.length) return true;
+  return selected.some(s=>{
+    if(s.endsWith('+')) return value >= Number(s.slice(0,-1));
+    return String(value)===s;
+  });
+}
 function renderInventoryPage(u){
   const tk = myTeamKey(u);
   const unitTypes = tk==='residential'?UNIT_TYPES_RES:UNIT_TYPES_COM;
@@ -13,19 +23,30 @@ function renderInventoryPage(u){
     const q = session.invSearch.toLowerCase();
     list = list.filter(x=> (x.compound+x.developer+x.area).toLowerCase().includes(q));
   }
-  if(f.bedrooms.length) list = list.filter(x=> f.bedrooms.includes(String(x.bedrooms)));
-  if(f.bathrooms.length) list = list.filter(x=> f.bathrooms.includes(String(x.bathrooms)));
+  if(f.bedrooms.length) list = list.filter(x=> matchesCountFilter(f.bedrooms, x.bedrooms));
+  if(f.bathrooms.length) list = list.filter(x=> matchesCountFilter(f.bathrooms, x.bathrooms));
   if(f.unitType.length) list = list.filter(x=> f.unitType.includes(x.unitType));
   if(f.finishing.length) list = list.filter(x=> f.finishing.includes(x.finishing));
   if(f.saleRent.length) list = list.filter(x=> f.saleRent.includes(x.saleRent));
   if(f.delivery.length) list = list.filter(x=> f.delivery.includes(deliveryBucket(x.deliveryYears)));
+  const dpMin = f.dpMin!==''?Number(f.dpMin):null, dpMax = f.dpMax!==''?Number(f.dpMax):null;
+  const totalMin = f.totalMin!==''?Number(f.totalMin):null, totalMax = f.totalMax!==''?Number(f.totalMax):null;
+  if(dpMin!=null) list = list.filter(x=> x.downPayment>=dpMin);
+  if(dpMax!=null) list = list.filter(x=> x.downPayment<=dpMax);
+  if(totalMin!=null) list = list.filter(x=> x.totalPrice>=totalMin);
+  if(totalMax!=null) list = list.filter(x=> x.totalPrice<=totalMax);
 
   if(session.invSort==='popularity') list = list.slice().sort((a,b)=>popularityScore(b)-popularityScore(a));
   else if(session.invSort==='newest') list = list.slice().sort((a,b)=>b.createdAt-a.createdAt);
   else list = list.slice().sort((a,b)=>a.createdAt-b.createdAt);
 
-  const bedroomOpts = tk==='residential' ? ['0','1','2','3','4','5'] : [];
-  const bathroomOpts = ['1','2','3','4'];
+  // "6 bedrooms or more" / "5 bathrooms or more" — not an artificial cap, just the highest
+  // bucket; matchesCountFilter() treats the "+"-suffixed option as "this many or more".
+  const bedroomOpts = tk==='residential' ? [['0','Studio'],['1','1'],['2','2'],['3','3'],['4','4'],['5','5'],['6+','6 or more']] : [];
+  const bathroomOpts = [['1','1'],['2','2'],['3','3'],['4','4'],['5+','5 or more']];
+
+  const activeFilterCount = f.bedrooms.length+f.bathrooms.length+f.unitType.length+f.finishing.length+f.saleRent.length+f.delivery.length
+    + (dpMin!=null||dpMax!=null?1:0) + (totalMin!=null||totalMax!=null?1:0);
 
   return `
   <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
@@ -37,26 +58,37 @@ function renderInventoryPage(u){
       <option value="newest" ${session.invSort==='newest'?'selected':''}>Sort: Newest</option>
       <option value="oldest" ${session.invSort==='oldest'?'selected':''}>Sort: Oldest</option>
     </select>
-    <button class="btn btn-sm" id="toggleFiltersBtn">${ic('search')} Filters</button>
+    <button class="btn btn-sm" id="toggleFiltersBtn">${ic('search')} Filters${activeFilterCount>0?` <span class="badge badge-brand" style="margin-left:2px;">${activeFilterCount}</span>`:''}</button>
   </div>
-  <div id="filterPanel" class="card card-pad" style="display:${session._showFilters?'block':'none'}; margin-bottom:14px;">
+  <div id="filterPanel" class="card card-pad filter-panel" style="display:${session._showFilters?'block':'none'}; margin-bottom:14px;">
+    <div class="filter-section-label">Price</div>
+    <div class="filter-range-row">
+      <div class="field" style="margin-bottom:0;"><label class="field-label">Down payment — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMin" placeholder="e.g. 2,000,000" value="${esc(f.dpMin)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label">Down payment — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMax" placeholder="e.g. 3,000,000" value="${esc(f.dpMax)}"></div>
+    </div>
+    <div class="filter-range-row" style="margin-top:10px; margin-bottom:16px;">
+      <div class="field" style="margin-bottom:0;"><label class="field-label">Total price — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMin" placeholder="e.g. 8,000,000" value="${esc(f.totalMin)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label">Total price — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMax" placeholder="e.g. 12,000,000" value="${esc(f.totalMax)}"></div>
+    </div>
     ${bedroomOpts.length?filterGroup('Bedrooms','bedrooms',bedroomOpts,f.bedrooms):''}
     ${filterGroup('Bathrooms','bathrooms',bathroomOpts,f.bathrooms)}
-    ${filterGroup('Unit type','unitType',unitTypes,f.unitType)}
-    ${filterGroup('Finishing','finishing',FINISHING,f.finishing)}
-    ${filterGroup('Sale / Rent','saleRent',['Sale','Rent'],f.saleRent)}
-    ${filterGroup('Delivery','delivery',['Immediate','1y','2y','4y'],f.delivery)}
-    <button class="btn btn-ghost btn-sm" id="clearFiltersBtn">Reset all filters</button>
+    ${filterGroup('Unit type','unitType',unitTypes.map(t=>[t,t]),f.unitType)}
+    ${filterGroup('Finishing','finishing',FINISHING.map(t=>[t,t]),f.finishing)}
+    ${filterGroup('Sale / Rent','saleRent',[['Sale','Sale'],['Rent','Rent']],f.saleRent)}
+    ${filterGroup('Delivery','delivery',[['Immediate','Immediate'],['1y','Within 1 year'],['2y','Within 2 years'],['4y','2+ years']],f.delivery)}
+    <button class="btn btn-ghost btn-sm" id="clearFiltersBtn" ${activeFilterCount===0?'disabled':''}>${ic('x')} Reset all filters</button>
   </div>
-  <div class="section-sub">${list.length} units found</div>
+  <div class="section-sub">${list.length} unit${list.length===1?'':'s'} found</div>
   <div class="grid-3" id="unitGrid">
-    ${list.length? list.map(un=>unitCard(un)).join('') : `<div class="empty-state" style="grid-column:1/-1;">${ic('inventory')}<div>No units match these filters.</div></div>`}
+    ${list.length? list.map(un=>unitCard(un)).join('') : `<div class="empty-state" style="grid-column:1/-1;">${ic('inventory')}<div>No units match these filters.</div>${activeFilterCount>0?`<button class="btn btn-sm" id="emptyClearFiltersBtn" style="margin-top:10px;">Reset all filters</button>`:''}</div>`}
   </div>`;
 }
 function filterGroup(label, key, opts, selected){
-  return `<div style="margin-bottom:14px;"><div class="field-label" style="margin-bottom:7px;">${label}</div>
+  return `<div class="filter-group"><div class="field-label" style="margin-bottom:7px; display:flex; align-items:center; justify-content:space-between;">
+      <span>${label}</span>${selected.length?`<button class="filter-clear-one" data-filter-clear="${key}">Clear</button>`:''}
+    </div>
     <div style="display:flex; gap:6px; flex-wrap:wrap;">
-    ${opts.map(o=>`<button class="chip-select ${selected.includes(o)?'on':''}" data-filter-key="${key}" data-filter-val="${o}">${key==='bedrooms'&&o==='0'?'Studio':o}</button>`).join('')}
+    ${opts.map(([val,text])=>`<button class="chip-select ${selected.includes(val)?'on':''}" data-filter-key="${key}" data-filter-val="${val}">${text}</button>`).join('')}
     </div></div>`;
 }
 function unitCard(un){
@@ -89,7 +121,9 @@ AFTER_RENDER.inventory = function(u){
   const s = document.getElementById('invSearch'); if(s) s.addEventListener('input', ()=>{ session.invSearch = s.value; renderPageInto(u); });
   const so = document.getElementById('invSort'); if(so) so.addEventListener('change', ()=>{ session.invSort = so.value; renderPageInto(u); });
   const tf = document.getElementById('toggleFiltersBtn'); if(tf) tf.addEventListener('click', ()=>{ session._showFilters = !session._showFilters; renderPageInto(u); });
-  const cf = document.getElementById('clearFiltersBtn'); if(cf) cf.addEventListener('click', ()=>{ session.invFilters = {bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[]}; renderPageInto(u); });
+  const doClear = ()=>{ session.invFilters = blankInvFilters(); renderPageInto(u); };
+  const cf = document.getElementById('clearFiltersBtn'); if(cf) cf.addEventListener('click', doClear);
+  const ecf = document.getElementById('emptyClearFiltersBtn'); if(ecf) ecf.addEventListener('click', doClear);
   document.querySelectorAll('[data-filter-key]').forEach(b=> b.addEventListener('click', ()=>{
     const k = b.dataset.filterKey, v = b.dataset.filterVal;
     const arr = session.invFilters[k];
@@ -97,6 +131,23 @@ AFTER_RENDER.inventory = function(u){
     if(i>=0) arr.splice(i,1); else arr.push(v);
     renderPageInto(u);
   }));
+  document.querySelectorAll('[data-filter-clear]').forEach(b=> b.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    session.invFilters[b.dataset.filterClear] = [];
+    renderPageInto(u);
+  }));
+  // 'change' (fires on blur / Enter), not 'input': these numeric range fields re-render the
+  // whole filter panel when applied, which would otherwise drop keyboard focus mid-digit on
+  // every keystroke (the same reason reference.js's search box needed special focus-restore
+  // handling). Applying on commit instead of per-keystroke sidesteps that entirely and also
+  // avoids filtering against a half-typed number.
+  ['dpMin','dpMax','totalMin','totalMax'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el){
+      el.addEventListener('change', ()=>{ session.invFilters[id] = el.value; renderPageInto(u); });
+      el.addEventListener('keydown', (e)=>{ if(e.key==='Enter') el.blur(); });
+    }
+  });
   document.querySelectorAll('.unit-card').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
 };
 

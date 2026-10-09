@@ -1,7 +1,10 @@
 /* =========================================================
    Session & routing
    ========================================================= */
-let session = { userId: sessionStorage.getItem('na1_user') || null, page: 'dashboard', tab:{}, activeTeamView:null, requestsFilter:'all', invFilters:{bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[]}, invSort:'popularity', invSearch:'', simToday:null };
+let session = { userId: sessionStorage.getItem('na1_user') || null, page: 'dashboard', tab:{}, activeTeamView:null, requestsFilter:'all',
+  invFilters:{bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[], dpMin:'',dpMax:'', totalMin:'',totalMax:''},
+  invSort:'popularity', invSearch:'', simToday:null };
+function blankInvFilters(){ return {bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[], dpMin:'',dpMax:'', totalMin:'',totalMax:''}; }
 
 // The Daily Report module launches 2026-11-01 — before that date, real usage shows a
 // "coming soon" notice. `effectiveTodayStr` lets a user explicitly preview the module
@@ -131,7 +134,7 @@ function navItems(u){
     {key:'owners', label:'Owners', icon:'owners'}
   );
   // Daily Reports: every sales-active person files their OWN report — role never removes this.
-  if(isSalesActive(u)) items.push({key:'reports', label:'Daily Reports', icon:'calendar', badge: ()=> { const ds=effectiveTodayStr(); return reportStatusOf(u.id, ds)==='missing' && isOnOrAfterLaunch(ds) ? 1 : 0; }});
+  if(isSalesActive(u)) items.push({key:'reports', label:'Daily Reports', icon:'calendar', badge: ()=> { const ds=effectiveTodayStr(); return personalReportStatus(u, ds)==='missing' && isOnOrAfterLaunch(ds) ? 1 : 0; }});
   items.push(
     {key:'reference', label:'Reference', icon:'reference'},
     {key:'notifications', label:'Notifications', icon:'notif', badge: ()=>unreadNotifCount(u)}
@@ -143,10 +146,10 @@ function navItems(u){
 // Mobile bottom bar: a fixed 4 slots + a "More" drawer. This is NOT a reduced-feature mode —
 // every item from navItems() is reachable, either directly or one tap into the "More" sheet
 // (explicitly allowed by spec: "If there is not enough room... use a More menu. But ALL core
-// features must remain accessible."). Owners, My Units AND Reference get fixed, always-visible
-// slots since they were specifically called out as never to be hidden/removed on mobile;
-// everything else (Daily Reports, Notifications, Admin, Leads if enabled, Profile) lives in More.
-const MOBILE_TABS = ['dashboard','owners','myunits','reference'];
+// features must remain accessible."). Dashboard, News Feed (Inventory), Requests and Reference
+// get the fixed, always-visible primary slots; everything else (Owners, My Units, Leads, Daily
+// Reports, Notifications, Admin, Profile) lives one tap away in the "More" drawer.
+const MOBILE_TABS = ['dashboard','inventory','requests','reference'];
 function mobileMoreItems(u){
   const items = navItems(u);
   return items.filter(it=> !MOBILE_TABS.includes(it.key));

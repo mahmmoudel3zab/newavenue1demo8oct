@@ -1,22 +1,13 @@
 {
-  "name": "new-avenue-1-api",
-  "version": "0.1.0",
-  "description": "Backend API for New Avenue 1 — internal real-estate sales platform",
-  "main": "src/index.js",
-  "type": "commonjs",
+  "name": "new-avenue-1-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "New Avenue 1 — internal sales platform prototype for New Avenue Real Estate Consultancy (static HTML/CSS/JS frontend, no build tools or external packages required).",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "seed": "node src/seed/seed.js"
+    "start": "node server.js",
+    "build": "node build.js"
   },
-  "dependencies": {
-    "better-sqlite3": "^11.3.0",
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
-    "uuid": "^9.0.1"
+  "engines": {
+    "node": ">=16"
   }
 }

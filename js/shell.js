@@ -11,47 +11,95 @@ function render(){
   renderPageInto(u);
 }
 
+// ---------------------------------------------------------------------------
+// Sign-in screen. This is a FRONTEND DEMO PROTOTYPE: there is no real password
+// auth here, and nothing about this screen's visual polish changes that — it
+// simply lets you pick any seeded demo account to explore the app from that
+// person's seat, exactly as before. Nothing about the underlying login
+// mechanism (setUser/sessionStorage) changed, only how it looks and how the
+// account list is browsed.
+// ---------------------------------------------------------------------------
+const LOGIN_GROUPS = [
+  {label:'Residential Team', ids:['s1','s2','s3','s6','tl1','m1','dir1']},
+  {label:'Commercial Team', ids:['s4','s5','s7','tl2','m2','dir2']},
+  {label:'Company Leadership', ids:['hos1','ceo1']},
+  {label:'Administration', ids:['ja1','sa1','ha1']},
+];
 function renderLogin(){
-  const groups = [
-    {label:'Residential Team', role:'', team:'residential', ids:['s1','s2','s3','s6','tl1','m1','dir1']},
-    {label:'Commercial Team', role:'', team:'commercial', ids:['s4','s5','s7','tl2','m2','dir2']},
-    {label:'Company Leadership', ids:['hos1','ceo1']},
-    {label:'Administration', ids:['ja1','sa1','ha1']},
-  ];
+  const q = (session._loginSearch||'').trim().toLowerCase();
+  const matches = (u)=> !q || u.name.toLowerCase().includes(q) || ROLE_LABELS[u.role].toLowerCase().includes(q);
   const cardFor = (id)=>{
-    const u = DB.users.find(x=>x.id===id); if(!u) return '';
-    return `<button class="login-card" data-uid="${u.id}" style="text-align:left; display:flex; align-items:center; gap:11px; padding:12px 14px; border-radius:10px; border:1px solid var(--border); background:var(--surface); width:100%; margin-bottom:8px;">
-      <span class="avatar" style="background:${u.avatar}">${initials(u.name)}</span>
-      <span style="flex:1">
-        <span style="display:block; font-weight:700; font-size:13.5px;">${esc(u.name)}</span>
-        <span style="display:block; font-size:11.5px; color:var(--text-faint);">${ROLE_LABELS[u.role]}${u.team?' · '+ (u.team[0].toUpperCase()+u.team.slice(1)):''}</span>
+    const u = DB.users.find(x=>x.id===id); if(!u || !matches(u)) return '';
+    return `<button class="login-card" data-uid="${u.id}">
+      <span class="avatar login-card-avatar" style="background:${u.avatar}">${initials(u.name)}</span>
+      <span class="login-card-info">
+        <span class="login-card-name">${esc(u.name)}</span>
+        <span class="login-card-role">${ROLE_LABELS[u.role]}${u.team?' · '+ (u.team[0].toUpperCase()+u.team.slice(1)):''}</span>
       </span>
       ${ic('chevron')}
     </button>`;
   };
+  const groupsHTML = LOGIN_GROUPS.map(g=>{
+    const cards = g.ids.map(cardFor).filter(Boolean).join('');
+    if(!cards) return '';
+    return `<div class="login-group"><div class="login-group-label">${g.label}</div>${cards}</div>`;
+  }).join('');
   return `
-  <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px;">
-    <div style="max-width:920px; width:100%; display:grid; grid-template-columns:1.1fr 1fr; gap:0; border-radius:20px; overflow:hidden; box-shadow:0 30px 70px rgba(0,0,0,.12); border:1px solid var(--border);">
-      <div style="background:linear-gradient(160deg,var(--brand-dark),var(--teal)); color:#fff; padding:44px 38px; display:flex; flex-direction:column; justify-content:space-between;">
-        <div>
-          <div style="width:44px;height:44px;border-radius:10px; background:rgba(255,255,255,.18); display:flex;align-items:center;justify-content:center; font-family:var(--font-head); font-weight:700; font-size:21px;">N</div>
-          <h1 style="font-size:32px; margin-top:26px; color:#fff;">New Avenue 1</h1>
-          <p style="opacity:.85; font-size:13.5px; max-width:280px; margin-top:10px;">The internal sales platform that brings leads, inventory, owners and requests into one place.</p>
+  <div class="login-screen">
+    <div class="login-shell">
+      <div class="login-brandpane">
+        <div class="login-brandpane-pattern"></div>
+        <div class="login-brandpane-top">
+          <div class="login-logo">
+            <div class="login-logo-mark">N</div>
+            <div><div class="login-logo-name">New Avenue</div><div class="login-logo-sub">Real Estate Consultancy</div></div>
+          </div>
         </div>
-        <div style="font-size:11.5px; opacity:.7;">Internal prototype · Residential &amp; Commercial environments</div>
+        <div class="login-brandpane-mid">
+          <h1>The sales platform<br>behind every deal.</h1>
+          <p>Inventory, owners, leads and client requests — one connected workspace for New Avenue's entire residential and commercial sales organization.</p>
+        </div>
+        <div class="login-stats">
+          <div class="login-stat"><div class="login-stat-num">2</div><div class="login-stat-label">Divisions</div></div>
+          <div class="login-stat"><div class="login-stat-num">18</div><div class="login-stat-label">Sales &amp; admin seats</div></div>
+          <div class="login-stat"><div class="login-stat-num">24/7</div><div class="login-stat-label">Live inventory</div></div>
+        </div>
       </div>
-      <div style="background:var(--surface); padding:36px 32px; max-height:80vh; overflow-y:auto;">
-        <h2 style="font-size:16px; margin-bottom:2px;">Sign in as a demo account</h2>
-        <p style="font-size:12px; color:var(--text-faint); margin-bottom:18px;">Pick any account below to explore the prototype from that person's seat.</p>
-        ${groups.map(g=>`<div style="margin-bottom:16px;"><div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--text-faint); margin-bottom:7px;">${g.label}</div>${g.ids.map(cardFor).join('')}</div>`).join('')}
+      <div class="login-formpane">
+        <div class="login-formpane-inner">
+          <h2>Sign in</h2>
+          <p class="login-formpane-sub">This is an internal prototype — choose a demo account below to continue. No password is required in this demo environment.</p>
+          <div class="search-field login-search">
+            ${ic('search')}<input id="loginSearch" placeholder="Search by name or role…" value="${esc(session._loginSearch||'')}" autocomplete="off">
+          </div>
+          <div class="login-list" id="loginList">
+            ${groupsHTML || `<div class="empty-state" style="padding:26px 10px;">${ic('search')}<div>No accounts match “${esc(session._loginSearch||'')}”.</div></div>`}
+          </div>
+          <div class="login-foot">Internal prototype · Residential &amp; Commercial environments</div>
+        </div>
       </div>
     </div>
   </div>`;
 }
 function attachLoginEvents(){
   document.querySelectorAll('.login-card').forEach(b=>{
-    b.addEventListener('click', ()=> setUser(b.dataset.uid));
+    b.addEventListener('click', (e)=>{
+      // Brief loading state on the clicked card before handing off to setUser(), so switching
+      // accounts reads as a real sign-in action rather than an instant, jarring page swap.
+      const btn = e.currentTarget;
+      if(btn.classList.contains('is-loading')) return;
+      btn.classList.add('is-loading');
+      btn.disabled = true;
+      setTimeout(()=> setUser(btn.dataset.uid), 220);
+    });
   });
+  const s = document.getElementById('loginSearch');
+  if(s){
+    s.addEventListener('input', ()=>{ session._loginSearch = s.value; render(); });
+    if(session._loginSearchFocused){ s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    s.addEventListener('focus', ()=>{ session._loginSearchFocused = true; });
+    s.addEventListener('blur', ()=>{ session._loginSearchFocused = false; });
+  }
 }
 
 function renderShell(u){
@@ -95,7 +143,8 @@ function renderShell(u){
     ${MOBILE_TABS.map(k=>{
       const it = items.find(i=>i.key===k); if(!it) return '';
       const badge = it.badge?it.badge():0;
-      return `<button class="mtab ${session.page===k && !session._moreOpen?'active':''}" data-nav="${k}">${ic(it.icon)}<span>${it.label}</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
+      const active = session.page===k && !session._moreOpen;
+      return `<button class="mtab ${active?'active':''}" data-nav="${k}"><span class="mtab-icon-wrap">${ic(it.icon)}${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</span><span>${it.label}</span></button>`;
     }).join('')}
     ${renderMoreTab(u)}
   </div>
@@ -103,14 +152,15 @@ function renderShell(u){
 }
 
 // The mobile "More" drawer — this is where every nav item NOT pinned to the 4 fixed tabs
-// (News Feed, Requests, Daily Reports, Reference's siblings, Notifications, Admin, Leads if
-// enabled, Profile, Switch account) lives. Nothing here is removed from the app; it's one tap
-// away instead of a fixed icon, exactly as the spec explicitly allows.
+// (Dashboard, News Feed, Requests, Reference are the fixed tabs) lives: Owners, My Units,
+// Leads (if enabled), Daily Reports, Notifications, Admin, Profile, Switch account. Nothing
+// here is removed from the app; it's one tap away instead of a fixed icon, exactly as the
+// spec explicitly allows.
 function renderMoreTab(u){
   const moreItems = mobileMoreItems(u);
   const badge = mobileMoreBadgeTotal(u);
   const active = session._moreOpen || moreItems.some(it=>it.key===session.page);
-  return `<button class="mtab ${active?'active':''}" id="moreTabBtn">${ic('more')}<span>More</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
+  return `<button class="mtab ${active?'active':''}" id="moreTabBtn"><span class="mtab-icon-wrap">${ic('more')}${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</span><span>More</span></button>`;
 }
 function renderMoreDrawer(u){
   const moreItems = mobileMoreItems(u);

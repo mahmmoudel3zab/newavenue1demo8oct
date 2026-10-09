@@ -15,13 +15,13 @@ function renderDashboard(u){
     // Instead it surfaces today's Daily Performance Report status, since that's the daily task.
     const ds = effectiveTodayStr();
     const launched = isOnOrAfterLaunch(ds);
-    const st = launched ? reportStatusOf(u.id, ds) : null;
+    const st = launched ? personalReportStatus(u, ds) : null;
     if(launched && st!=='completed'){
       banner = `<div class="card card-pad" style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
           <div style="width:42px;height:42px;border-radius:50%; background:var(--brand-tint); color:var(--brand-dark); display:flex;align-items:center;justify-content:center; flex-shrink:0;">${ic('calendar')}</div>
           <div style="flex:1;">
             <div style="font-weight:800; font-size:15px;">Today's Daily Report is ${st==='in_progress'?'in progress':'not started yet'}</div>
-            <div style="font-size:12.5px; color:var(--text-muted);">Keep your calls, showings and meetings up to date — it only takes a few seconds.</div>
+            <div style="font-size:12.5px; color:var(--text-muted);">${isMgmt(u)?'Just two quick fields — your comments and activities for today.':'Keep your calls, showings and meetings up to date — it only takes a few seconds.'}</div>
           </div>
           <button class="btn btn-primary" data-nav="reports">Open Daily Report</button>
         </div>`;
@@ -83,7 +83,7 @@ function renderDashboard(u){
         const sun = DB.units.filter(x=>x.ownerSalespersonId===su.id).length;
         const so = distinctOwnerCountForSalesperson(su.id);
         const ds = effectiveTodayStr();
-        const st = isOnOrAfterLaunch(ds) ? reportStatusOf(su.id, ds) : 'n/a';
+        const st = isOnOrAfterLaunch(ds) ? personalReportStatus(su, ds) : 'n/a';
         const stBadge = st==='completed' ? '<span class="badge badge-success">Completed</span>' : st==='in_progress' ? '<span class="badge badge-pending">In progress</span>' : st==='missing' ? '<span class="badge badge-fresh">Missing</span>' : '<span class="badge badge-muted">—</span>';
         return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(ROLE_LABELS[su.role])}</td><td>${stBadge}</td><td>${sun}</td><td>${so} / 30</td></tr>`;
       }).join('') : emptyRow('No team members yet.')}

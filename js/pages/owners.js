@@ -181,28 +181,133 @@ function refreshRelationship(rel, u, mode){
   persist();
 }
 
+/* ---------- Automatic duplicate-owner detection UI (Add Owner) ----------
+   Checks live, as the salesperson types either phone field, whether the number already matches
+   an existing Owner in the same team — normalizing formatting differences the same way the final
+   save-time check always has. A match held by someone else blocks the normal Save button (no
+   silent duplicate record); the only ways past it are the existing admin-approved "claim" request
+   (unchanged) or, for Senior/Head Admin only, an explicit override with a typed reason and a
+   confirmation dialog. A match that's already the current user's own owner is shown as a plain
+   reassurance, never a blocker. */
+function ownerDupUnitRow(un){
+  return `<div style="padding:5px 0; border-top:1px solid var(--border); font-size:12px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+    <span style="font-weight:600;">${esc(un.compound)}</span><span style="color:var(--text-faint);">· ${esc(un.phase)} · ${esc(un.unitType)} · ${un.areaSize}m² · ${esc(un.saleRent)}</span>
+    ${un.pending?'<span class="badge badge-pending">Pending review</span>':'<span class="badge badge-success">Active</span>'}
+  </div>`;
+}
+function renderOwnerDupWarning(ctx, viewer, opts){
+  opts = opts || {};
+  if(!ctx) return '';
+  if(ctx.isMine){
+    return `<div class="card card-pad" id="dupWarnCard" style="background:var(--success-tint); border:1px solid var(--success); margin:4px 0 14px; font-size:12.5px;">
+      <div style="font-weight:800; margin-bottom:3px;">${ic('check')} Already in your list</div>
+      <div>${esc(ctx.ownerName)} (${phoneLocalDisplay(ctx.phone)}) is already one of your owners — saving will open the existing record rather than create a new one.</div>
+    </div>`;
+  }
+  const unitsHtml = ctx.units.length ? ctx.units.map(ownerDupUnitRow).join('') : `<div style="font-size:12px; color:var(--text-faint); padding:4px 0;">No units linked to this owner yet.</div>`;
+  const canOverride = !opts.readOnly && isAdmin(viewer) && typeof canManageUsers==='function' && canManageUsers(viewer);
+  return `<div class="card card-pad" id="dupWarnCard" style="background:var(--danger-tint); border:1px solid var(--danger); margin:4px 0 14px; font-size:12.5px;">
+    <div style="font-weight:800; color:var(--danger); margin-bottom:4px;">${ic('notif')} Existing Owner Found</div>
+    <div style="margin-bottom:8px;">This phone number is already registered in New Avenue 1${opts.readOnly?' with a different owner record':''}.</div>
+    <div style="margin-bottom:3px;"><b>${esc(ctx.ownerName)}</b> · ${phoneLocalDisplay(ctx.phone)}${ctx.phone2?' / '+phoneLocalDisplay(ctx.phone2):''}</div>
+    <div style="margin-bottom:3px;">Registered salesperson: <b>${esc(ctx.holderName||'—')}</b>${ctx.holderRefCode?' · Ref '+esc(ctx.holderRefCode):''}</div>
+    ${ctx.holderTeamLabel ? `<div style="margin-bottom:6px; color:var(--text-faint);">${esc(ctx.holderTeamLabel)}${ctx.holderManagerName?' · Reports to '+esc(ctx.holderManagerName):''}</div>` : ''}
+    <div style="font-weight:700; margin:8px 0 2px;">Associated units (${ctx.units.length})</div>
+    ${unitsHtml}
+    ${opts.readOnly ? `<div style="margin-top:10px; font-size:12px; color:var(--text-faint);">Saving is blocked while this matches another owner's phone number — this would otherwise merge two distinct owner records.</div>` : `
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+      ${ctx.holderPhone?`<a class="btn btn-sm" href="${telHref(ctx.holderPhone)}">${ic('phone')} Call ${esc((ctx.holderName||'').split(' ')[0]||'')}</a>`:''}
+      ${ctx.holderWhatsapp?`<a class="btn btn-sm" href="${waHref(ctx.holderWhatsapp)}" target="_blank" rel="noopener">${ic('whatsapp')} WhatsApp</a>`:''}
+      <button class="btn btn-sm btn-primary" id="dupRequestAccessBtn" type="button">Request access (admin approval)</button>
+      ${canOverride?`<button class="btn btn-sm btn-ghost" id="dupOverrideBtn" type="button">Create separate record anyway</button>`:''}
+    </div>
+    <div id="dupOverridePanel"></div>`}
+  </div>`;
+}
+function overridePanelHTML(){
+  return `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--danger);">
+    <label class="field-label">Reason for creating a separate record (required)</label>
+    <textarea id="dupOverrideReason" rows="2" style="width:100%;" placeholder="e.g. Different individual sharing a family phone line — confirmed with owner"></textarea>
+    <button class="btn btn-sm btn-primary" id="dupOverrideConfirmBtn" type="button" style="margin-top:8px;">Confirm override & create separate owner</button>
+  </div>`;
+}
+function wireOwnerDupWarningEvents(u, tk, getNamePhones){
+  const reqBtn = document.getElementById('dupRequestAccessBtn');
+  if(reqBtn) reqBtn.addEventListener('click', ()=>{
+    const ctx = session._addOwnerDupCtx;
+    if(!ctx) return;
+    DB.transfers.push({id:uid('tr'), type:'claim', ownerUnitId:null, ownerId:ctx.ownerId, unitId:null, fromSalespersonId:ctx.holderId, toSalespersonId:u.id, status:'pending', at:now()});
+    log(u.id,'owner_claim_requested',{ownerId:ctx.ownerId});
+    persist(); closeModal(); toast('Claim sent for admin approval — that owner already exists with another salesperson'); renderPageInto(u);
+  });
+  const ovBtn = document.getElementById('dupOverrideBtn');
+  if(ovBtn) ovBtn.addEventListener('click', ()=>{
+    const panel = document.getElementById('dupOverridePanel');
+    if(panel) panel.innerHTML = overridePanelHTML();
+    const confirmBtn = document.getElementById('dupOverrideConfirmBtn');
+    if(confirmBtn) confirmBtn.addEventListener('click', ()=>{
+      const ctx = session._addOwnerDupCtx;
+      const reason = (document.getElementById('dupOverrideReason')||{}).value || '';
+      if(!reason.trim()){ toast('A reason is required to create a separate record'); return; }
+      if(!confirm('Create a separate Owner record with the same phone number as an existing Owner?\n\nReason: '+reason.trim()+'\n\nThis is an administrative exception — use it only when you are certain these are genuinely different owners.')) return;
+      const { name, canonical, canonical2 } = getNamePhones();
+      if(!name){ toast('Owner name is required'); return; }
+      if(!canonical){ toast('Enter a valid phone number'); return; }
+      const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), duplicateOverride:{of:ctx.ownerId, reason:reason.trim(), by:u.id, at:now()}};
+      DB.owners.push(owner);
+      log(u.id,'owner_added_duplicate_override',{ownerId:owner.id, matchedOwnerId:ctx.ownerId, reason:reason.trim()});
+      persist(); closeModal(); toast('Separate owner record created (administrative exception)'); session._expandedOwner=null; renderPageInto(u);
+    });
+  });
+}
+
 /* ---------- Add Owner flow — INDEPENDENT of any Unit ----------
    1) User enters name + phone and saves. No unit is required or asked for here.
-   2) The Owner now exists on its own. Units are linked to it afterward via "Add unit". */
+   2) The Owner now exists on its own. Units are linked to it afterward via "Add unit".
+   3) As the phone is typed, an existing matching Owner (if any) is detected live and shown with
+      full context — see the duplicate-detection block above. */
 function openAddOwnerModal(u){
   const tk = myTeamKey(u);
+  session._addOwnerDupCtx = null;
   openModal(`
     <div class="modal-head"><div style="font-weight:800;">Add owner</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
     <div class="modal-body">
       <div class="section-sub" style="margin-bottom:16px;">Create the owner contact first — you can link one or more units to them afterward.</div>
       <div class="field"><label class="field-label">Owner name</label><input id="ow_name"></div>
       <div class="field"><label class="field-label">Phone (digits only — local 01XXXXXXXXX or international 20XXXXXXXXXXX)</label><input id="ow_phone" inputmode="numeric" placeholder="e.g. 01012345678 or 201012345678"></div>
+      <div id="ow_dupWarning"></div>
       <div class="field"><label class="field-label">Second phone (optional)</label><input id="ow_phone2" inputmode="numeric"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-primary" id="saveOwnerBtn">Save owner</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
-  ['ow_phone','ow_phone2'].forEach(id=>{
-    document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); });
-  });
-  document.getElementById('saveOwnerBtn').addEventListener('click', ()=>{
+
+  function currentNamePhones(){
     const name = document.getElementById('ow_name').value.trim();
     const rawPhone = document.getElementById('ow_phone').value.trim();
     const rawPhone2 = document.getElementById('ow_phone2').value.trim();
+    const canonical = isDigitsOnly(rawPhone) ? normalizeEgyptPhone(rawPhone) : null;
+    const canonical2 = rawPhone2 && isDigitsOnly(rawPhone2) ? normalizeEgyptPhone(rawPhone2) : null;
+    return { name, rawPhone, rawPhone2, canonical, canonical2 };
+  }
+  function runDupCheck(){
+    const { rawPhone, rawPhone2 } = currentNamePhones();
+    const match = findDuplicateOwnerByRawPhone(rawPhone, tk) || findDuplicateOwnerByRawPhone(rawPhone2, tk);
+    const ctx = match ? ownerDuplicateContext(match, u) : null;
+    session._addOwnerDupCtx = ctx;
+    const box = document.getElementById('ow_dupWarning');
+    if(box){
+      box.innerHTML = renderOwnerDupWarning(ctx, u);
+      wireOwnerDupWarningEvents(u, tk, ()=>{ const r = currentNamePhones(); return { name:r.name, canonical:r.canonical, canonical2:r.canonical2 }; });
+    }
+    const saveBtn = document.getElementById('saveOwnerBtn');
+    if(saveBtn) saveBtn.disabled = !!(ctx && ctx.heldByOthers);
+  }
+  ['ow_phone','ow_phone2'].forEach(id=>{
+    document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); runDupCheck(); });
+  });
+
+  document.getElementById('saveOwnerBtn').addEventListener('click', ()=>{
+    const { name, rawPhone, rawPhone2 } = currentNamePhones();
     if(!name){ toast('Owner name is required'); return; }
     if(!isDigitsOnly(rawPhone)){ toast('Phone must contain digits only (no +, spaces, dashes or letters)'); return; }
     const canonical = normalizeEgyptPhone(rawPhone);
@@ -219,12 +324,10 @@ function openAddOwnerModal(u){
       return;
     }
     if(existing && ownerHeldByOthers(existing.id, u.id)){
-      // Don't silently duplicate the owner record — require admin approval before this
-      // salesperson can be granted access to this same contact.
-      const holder = existing.salespersonId || (DB.ownerUnits.find(r=>r.ownerId===existing.id && r.status==='active')||{}).salespersonId || null;
-      DB.transfers.push({id:uid('tr'), type:'claim', ownerUnitId:null, ownerId:existing.id, unitId:null, fromSalespersonId:holder, toSalespersonId:u.id, status:'pending', at:now()});
-      log(u.id,'owner_claim_requested',{ownerId:existing.id});
-      persist(); closeModal(); toast('That owner already exists with another salesperson — claim sent for admin approval'); renderPageInto(u);
+      // Don't silently duplicate the owner record — the live warning above already surfaced this
+      // and offers "Request access" / admin override; the plain Save button is a dead end here by
+      // design (also disabled by runDupCheck) so this only fires if that validation is bypassed.
+      toast('This owner already exists with another salesperson — use "Request access" above, or an admin override, instead of Save');
       return;
     }
     if(distinctOwnerCountForSalesperson(u.id)>=30){
@@ -272,12 +375,27 @@ function openEditOwnerModal(ownerId, u){
     <div class="modal-body">
       <div class="field"><label class="field-label">Owner name</label><input id="eo_name" value="${esc(o.name)}"></div>
       <div class="field"><label class="field-label">Phone</label><input id="eo_phone" inputmode="numeric" value="${phoneLocalDisplay(o.phone)}"></div>
+      <div id="eo_dupWarning"></div>
       <div class="field"><label class="field-label">Second phone (optional)</label><input id="eo_phone2" inputmode="numeric" value="${o.phone2?phoneLocalDisplay(o.phone2):''}"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-primary" id="saveEditOwnerBtn">Save changes</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
+
+  function runEditDupCheck(){
+    const rawPhone = document.getElementById('eo_phone').value.trim();
+    const rawPhone2 = document.getElementById('eo_phone2').value.trim();
+    const m1 = findDuplicateOwnerByRawPhone(rawPhone, o.team);
+    const m2 = findDuplicateOwnerByRawPhone(rawPhone2, o.team);
+    const match = (m1 && m1.id!==o.id) ? m1 : ((m2 && m2.id!==o.id) ? m2 : null);
+    const ctx = match ? ownerDuplicateContext(match, u) : null;
+    session._editOwnerDupCtx = ctx;
+    const box = document.getElementById('eo_dupWarning');
+    if(box) box.innerHTML = ctx ? renderOwnerDupWarning(ctx, u, {readOnly:true}) : '';
+    const saveBtn = document.getElementById('saveEditOwnerBtn');
+    if(saveBtn) saveBtn.disabled = !!ctx;
+  }
   ['eo_phone','eo_phone2'].forEach(id=>{
-    document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); });
+    document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); runEditDupCheck(); });
   });
   document.getElementById('saveEditOwnerBtn').addEventListener('click', ()=>{
     const name = document.getElementById('eo_name').value.trim();

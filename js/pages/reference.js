@@ -11,30 +11,34 @@ function waHref(localPhone){ return 'https://wa.me/20'+String(localPhone).replac
 function renderReferencePage(u){
   const tk = myTeamKey(u);
   const q = (session._refSearch||'').trim().toLowerCase();
-  let list = DB.refs.filter(r=>r.team===tk);
-  if(q){ list = list.filter(r=> r.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q)); }
-  list = list.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  // Name/role/manager/code are always resolved live from DB.users (see refUser()/refManager()
+  // in data.js) — never from a cached copy on the ref row — so an admin renaming someone,
+  // changing their role, or reassigning their manager shows up here immediately, with nothing
+  // that can go stale.
+  let list = DB.refs.filter(r=>r.team===tk).map(r=>({r, person: refUser(r)})).filter(x=>x.person);
+  if(q){ list = list.filter(({r,person})=> person.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q)); }
+  list = list.slice().sort((a,b)=>a.person.name.localeCompare(b.person.name));
   return `
   <div class="section-sub" style="margin-bottom:10px;">${tk[0].toUpperCase()+tk.slice(1)} team — search any salesperson or manager to call or message them directly</div>
   <div class="search-field" style="max-width:420px; margin-bottom:16px;">
     ${ic('search')}<input id="refSearch" placeholder="Search by name or reference code…" value="${esc(session._refSearch||'')}">
   </div>
   <div class="card">
-    ${list.length? list.map(r=>referenceRow(r,u)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
+    ${list.length? list.map(({r,person})=>referenceRow(r,person,u)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
   </div>`;
 }
 
-function referenceRow(r,u){
-  const self = DB.users.find(x=>x.id===r.userId);
-  const canEdit = self && (self.id===u.id || u.role==='senioradmin' || u.role==='headadmin');
+function referenceRow(r,person,u){
+  const mgr = refManager(r);
+  const canEdit = person.id===u.id || u.role==='senioradmin' || u.role==='headadmin';
   return `<div class="card-pad" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; border-bottom:1px solid var(--border);">
-    <span class="avatar" style="background:${avatarColor(r.name)}; width:38px;height:38px; flex-shrink:0;">${initials(r.name)}</span>
+    <span class="avatar" style="background:${avatarColor(person.name)}; width:38px;height:38px; flex-shrink:0;">${initials(person.name)}</span>
     <div style="flex:1; min-width:180px;">
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <span style="font-weight:700; font-size:13.5px;">${esc(r.name)}</span>
+        <span style="font-weight:700; font-size:13.5px;">${esc(person.name)}</span>
         <span class="badge badge-brand">${esc(r.code)}</span>
       </div>
-      <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${esc(ROLE_LABELS[r.role]||r.role)}${r.managerName?' · reports to '+esc(r.managerName):''}</div>
+      <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${esc(ROLE_LABELS[person.role]||person.role)}${mgr?' · reports to '+esc(mgr.name):''}</div>
     </div>
     <div class="contact-actions">
       <a class="btn btn-sm btn-call" href="${telHref(r.phone)}" data-refphone="${r.id}">${ic('phone')} ${esc(r.phone)}</a>
@@ -62,7 +66,8 @@ AFTER_RENDER.reference = function(u){
 function openEditRefModal(refId, u){
   const r = DB.refs.find(x=>x.id===refId);
   if(!r) return;
-  openModal(`<div class="modal-head"><div style="font-weight:800;">Edit contact — ${esc(r.name)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
+  const person = refUser(r);
+  openModal(`<div class="modal-head"><div style="font-weight:800;">Edit contact — ${esc(person?person.name:'—')}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
   <div class="modal-body">
     <div class="field"><label class="field-label">Phone (for calls)</label><input id="rf_phone" inputmode="numeric" value="${esc(r.phone)}"></div>
     <div class="field"><label class="field-label">WhatsApp number</label><input id="rf_wa" inputmode="numeric" value="${esc(r.whatsapp)}"></div>

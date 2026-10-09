@@ -357,25 +357,118 @@ function ownerHeldByOthers(ownerId, excludingSpId){
   return DB.ownerUnits.some(r=>r.ownerId===ownerId && r.status==='active' && r.salespersonId!==excludingSpId);
 }
 
+/* ---------- Automatic duplicate-owner detection ----------
+   Live detection of an existing Owner matching a phone number being typed into "Add owner" (or
+   any other place a phone gets attached to a new Owner/Unit). This reuses the exact same
+   matching rule already enforced at save-time (findOwnerByCanonicalPhone, scoped to the same
+   team) — it only adds doing the check AS THE USER TYPES, before any record is created, and
+   surfacing full context (who already has this owner, and what units they hold) so the employee
+   never has to guess or manually search. Formatting differences (spaces/dashes/local vs
+   international) are handled by normalizeEgyptPhone, the same normalizer used everywhere else. */
+function findDuplicateOwnerByRawPhone(raw, team){
+  if(!raw) return null;
+  const digitsOnly = String(raw).replace(/[^0-9]/g,''); // tolerate spaces/dashes typed live, same as the "+"/space-stripping already done on these inputs
+  if(!digitsOnly) return null;
+  const canonical = normalizeEgyptPhone(digitsOnly);
+  if(!canonical) return null; // not (yet) a complete/valid number — no false-positive warning while still typing
+  return findOwnerByCanonicalPhone(canonical, team);
+}
+// Builds the "who already has this owner" context for the duplicate-detection warning, shaped by
+// what the VIEWER is permitted to see. Every sales-active, team-assigned person's contact info
+// (phone/WhatsApp) is already visible to their whole team via the Reference directory, so showing
+// it again here isn't a new exposure — but the manager/team-hierarchy line is limited to the
+// record's own owner, admins, and management roles, consistent with "show a limited duplicate
+// warning if the user is not permitted to view the full record" in the spec.
+function ownerDuplicateContext(owner, viewer){
+  const rels = activeOwnerUnitsFor(owner.id);
+  const holderId = owner.salespersonId || (rels[0]||{}).salespersonId || null;
+  const holder = holderId ? DB.users.find(x=>x.id===holderId) : null;
+  const ref = holder ? DB.refs.find(r=>r.userId===holder.id) : null;
+  const isSelf = !!(holder && viewer && holder.id===viewer.id);
+  const canSeeHierarchy = isSelf || isAdmin(viewer) || isMgmt(viewer);
+  const units = rels.map(r=>{
+    const un = DB.units.find(x=>x.id===r.unitId);
+    if(!un) return null;
+    return { unitId: un.id, compound: un.compound, phase: un.phase, unitType: un.unitType, areaSize: un.areaSize, saleRent: un.saleRent, pending: !!un.pending };
+  }).filter(Boolean);
+  return {
+    ownerId: owner.id, ownerName: owner.name, phone: owner.phone, phone2: owner.phone2 || null,
+    holderId: holder ? holder.id : null,
+    holderName: holder ? holder.name : null,
+    holderRefCode: ref ? ref.code : null,
+    holderPhone: ref ? ref.phone : null,
+    holderWhatsapp: ref ? ref.whatsapp : null,
+    holderTeamLabel: (canSeeHierarchy && holder && holder.team) ? (holder.team[0].toUpperCase()+holder.team.slice(1)) : null,
+    holderManagerName: (canSeeHierarchy && holder && holder.managerId) ? ((DB.users.find(x=>x.id===holder.managerId)||{}).name || null) : null,
+    isSelf,
+    heldByOthers: viewer ? ownerHeldByOthers(owner.id, viewer.id) : true,
+    isMine: viewer ? salespersonHasOwner(viewer.id, owner.id) : false,
+    units
+  };
+}
+
 /* ---------- Reference dictionary ----------
    The Reference section is a SALESPERSON CONTACT DIRECTORY — not a general project/compound
    reference sheet. Every sales-active person (plain salespeople AND every management role,
    since role never removes personal sales activity) gets an entry with a distinct reference
-   code, their role, their manager/team-leader relationship, and SEPARATE phone/WhatsApp
-   numbers (they may differ) so the directory can offer real one-tap Call / WhatsApp actions. */
+   code and SEPARATE phone/WhatsApp numbers (they may differ) so the directory can offer real
+   one-tap Call / WhatsApp actions.
+   DB.refs intentionally stores ONLY the contact-specific fields (code, phone, whatsapp) plus
+   `userId`/`team` — never a cached copy of the person's name, role or manager. Those are always
+   resolved live from DB.users via refUser()/refManager() below, so an admin renaming a user,
+   changing their role, or reassigning their manager can never leave a stale name/role/manager
+   behind in the directory — there is nothing here to go stale. */
 function buildReferenceDict(users){
   const refs = [];
   users.filter(u=>isSalesActive(u) && u.team).forEach(u=>{
-    const mgr = users.find(m=>m.id===u.managerId);
     refs.push({
       id: uid('rf'), team: u.team, userId: u.id,
       code: (u.team==='residential'?'RES-':'COM-')+u.id.toUpperCase(),
-      name: u.name, role: u.role, managerId: u.managerId, managerName: mgr?mgr.name:null,
       phone: '01'+rndInt(0,2)+rndInt(10000000,99999999),
       whatsapp: '01'+rndInt(0,2)+rndInt(10000000,99999999),
     });
   });
   return refs;
+}
+function refUser(r){ return DB.users.find(x=>x.id===r.userId) || null; }
+function refManager(r){ const u = refUser(r); return u ? DB.users.find(x=>x.id===u.managerId) : null; }
+
+/* ---------- Admin: full sales-user management (Head Admin / Senior Admin) ----------
+   Keeps DB.users and the denormalized-free DB.refs directory in sync whenever an admin adds a
+   user, changes a role, reassigns a manager, or switches a department — so Reference, My/Team
+   data visibility, and every other screen that reads DB.users/DB.refs stay consistent without
+   needing their own separate "did this change?" logic. */
+const ADMIN_ASSIGNABLE_ROLES = ['salesperson','teamleader','manager','director','headofsales','ceo','junioradmin','senioradmin','headadmin'];
+// Only Senior Admin and Head Admin may manage user accounts, roles and hierarchy — Junior Admin
+// stays operational-only (inventory/owners), matching the existing admin tiering.
+function canManageUsers(u){ return isAdmin(u) && (u.role==='senioradmin' || u.role==='headadmin'); }
+// Ensures DB.refs has exactly one entry for this user if-and-only-if they're currently
+// sales-active with a team assigned — creates one (fresh code/phone/whatsapp) if newly
+// eligible, removes it if no longer eligible (e.g. moved to an admin role), and otherwise just
+// keeps its `team` in sync. Call this after ANY change to a user's role/team.
+function syncRefForUser(user){
+  const existing = DB.refs.find(r=>r.userId===user.id);
+  const eligible = isSalesActive(user) && !!user.team;
+  if(eligible){
+    if(existing){ existing.team = user.team; }
+    else {
+      DB.refs.push({
+        id: uid('rf'), team: user.team, userId: user.id,
+        code: (user.team==='residential'?'RES-':'COM-')+user.id.toUpperCase(),
+        phone: '01'+rndInt(0,2)+rndInt(10000000,99999999),
+        whatsapp: '01'+rndInt(0,2)+rndInt(10000000,99999999),
+      });
+    }
+  } else if(existing){
+    DB.refs = DB.refs.filter(r=>r.id!==existing.id);
+  }
+}
+// Every role a user COULD report to, i.e. not themselves and not anyone already in their own
+// downline (prevents creating a reporting cycle, e.g. assigning your own subordinate as your
+// manager). Used to populate the "Reports to" selector sensibly rather than just excluding self.
+function possibleManagersFor(userId){
+  const down = new Set(getDownlineIds(DB.users, userId));
+  return DB.users.filter(x=> x.id!==userId && !down.has(x.id));
 }
 
 function buildDemoData(){
@@ -399,8 +492,12 @@ function buildDemoData(){
     readPositions, owners, ownerUnits, transfers: [], refs,
     // Daily Performance Report launches from zero on 2026-11-01 — intentionally empty, no historical import.
     dailyReports: [],
+    // Simplified management Daily Report (Daily Comments + Daily Activities) — a separate
+    // collection from dailyReports (the full salesperson form), never mixed with it. Also
+    // starts empty; one row per management user per date.
+    mgmtReports: [],
     notifications: [], auditLog: [],
-    meta: { version: 3 }
+    meta: { version: 4 }
   };
 }
 
@@ -466,6 +563,21 @@ function reportStatusOf(spId, ds){
   if(!r) return 'missing';
   return r.status; // 'in_progress' | 'completed'
 }
+// Status of a PERSON's own report for a date, routed to the right collection for their role:
+// management roles file the simple Comments+Activities report (DB.mgmtReports, 'completed' once
+// both fields are non-empty, otherwise 'missing' — there's no partial/"in_progress" state for a
+// two-field form), everyone else files the detailed salesperson form (DB.dailyReports, via
+// reportStatusOf). Anything that shows a user's OWN "did you file today's report" status
+// (dashboard banner, the Daily Reports nav badge) must use this, not reportStatusOf directly —
+// calling reportStatusOf for a management user would always read 'missing' since they never
+// write to DB.dailyReports at all.
+function personalReportStatus(user, ds){
+  if(isMgmt(user)){
+    const r = getMgmtReport(user.id, ds);
+    return (r && r.comments.trim() && r.activities.trim()) ? 'completed' : 'missing';
+  }
+  return reportStatusOf(user.id, ds);
+}
 function reportsForMonth(spId, monthKey){
   return DB.dailyReports.filter(r=>r.salespersonId===spId && monthKeyOf(r.date)===monthKey).sort((a,b)=> a.date<b.date?-1:1);
 }
@@ -497,10 +609,35 @@ function monthlyTotals(reports){
   return totals;
 }
 
+/* =========================================================
+   Management Daily Report — simplified personal report for management roles
+   Managers are also salespeople (role never removes personal sales activity), but they are NOT
+   required to fill the full 11-metric salesperson form. Each management user instead files a
+   short personal report of their own: Daily Comments + Daily Activities (both free text), one
+   per date (find-or-create, same one-row-per-person-per-date guarantee as the salesperson
+   report). This is a SEPARATE collection (DB.mgmtReports) from DB.dailyReports — never merged,
+   never read by the salesperson report UI, and never mixed with a manager's Team Reports view
+   (which only ever reads the DOWNLINE's dailyReports, never this collection).
+   ========================================================= */
+function getMgmtReport(userId, ds){ return DB.mgmtReports.find(r=>r.userId===userId && r.date===ds) || null; }
+function getOrCreateMgmtReport(userId, ds){
+  let r = getMgmtReport(userId, ds);
+  if(r) return r;
+  r = { id: uid('mr'), userId, date: ds, comments:'', activities:'', createdAt: now(), updatedAt: now() };
+  DB.mgmtReports.push(r);
+  return r;
+}
+function saveMgmtReport(report, comments, activities){
+  report.comments = comments; report.activities = activities; report.updatedAt = now();
+}
+function mgmtReportsForUser(userId){
+  return DB.mgmtReports.filter(r=>r.userId===userId).sort((a,b)=> a.date<b.date?1:-1);
+}
+
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===3) return parsed; }
+    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===4) return parsed; }
   }catch(e){ console.warn('load failed', e); }
   // Version 1 (bare owner "units" count, no Daily Report module) is superseded by the
   // real Owner<->Unit relationship model — demo data is regenerated rather than migrated,
