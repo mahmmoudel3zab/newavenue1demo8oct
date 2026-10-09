@@ -95,17 +95,48 @@ function renderShell(u){
     ${MOBILE_TABS.map(k=>{
       const it = items.find(i=>i.key===k); if(!it) return '';
       const badge = it.badge?it.badge():0;
-      return `<button class="mtab ${session.page===k?'active':''}" data-nav="${k}">${ic(it.icon)}<span>${it.label}</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
+      return `<button class="mtab ${session.page===k && !session._moreOpen?'active':''}" data-nav="${k}">${ic(it.icon)}<span>${it.label}</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
     }).join('')}
+    ${renderMoreTab(u)}
+  </div>
+  ${session._moreOpen ? renderMoreDrawer(u) : ''}`;
+}
+
+// The mobile "More" drawer — this is where every nav item NOT pinned to the 4 fixed tabs
+// (News Feed, Requests, Daily Reports, Reference's siblings, Notifications, Admin, Leads if
+// enabled, Profile, Switch account) lives. Nothing here is removed from the app; it's one tap
+// away instead of a fixed icon, exactly as the spec explicitly allows.
+function renderMoreTab(u){
+  const moreItems = mobileMoreItems(u);
+  const badge = mobileMoreBadgeTotal(u);
+  const active = session._moreOpen || moreItems.some(it=>it.key===session.page);
+  return `<button class="mtab ${active?'active':''}" id="moreTabBtn">${ic('more')}<span>More</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
+}
+function renderMoreDrawer(u){
+  const moreItems = mobileMoreItems(u);
+  return `<div class="drawer-backdrop" id="moreDrawerBackdrop">
+    <div class="drawer-sheet">
+      <div class="drawer-handle"></div>
+      <div style="font-weight:800; font-size:14px; padding:0 4px 10px;">More</div>
+      ${moreItems.map(it=>{
+        const badge = it.badge?it.badge():0;
+        return `<button class="nav-item drawer-item ${session.page===it.key?'active':''}" data-nav="${it.key}" data-closemore="1">${ic(it.icon)}<span>${it.label}</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;
+      }).join('')}
+      <div class="nav-divider"></div>
+      <button class="nav-item drawer-item" id="drawerLogoutBtn">${ic('logout')}<span>Switch account</span></button>
+    </div>
   </div>`;
 }
 
 function attachShellEvents(u){
-  document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=> go(b.dataset.nav)));
+  document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=>{ session._moreOpen=false; go(b.dataset.nav); }));
   const lo = document.getElementById('logoutBtn'); if(lo) lo.addEventListener('click', logout);
   const nb = document.getElementById('topNotifBtn'); if(nb) nb.addEventListener('click', ()=> go('notifications'));
   const tr = document.getElementById('teamViewRes'); if(tr) tr.addEventListener('click', ()=>{ session.activeTeamView='residential'; render(); });
   const tc = document.getElementById('teamViewCom'); if(tc) tc.addEventListener('click', ()=>{ session.activeTeamView='commercial'; render(); });
+  const mb = document.getElementById('moreTabBtn'); if(mb) mb.addEventListener('click', ()=>{ session._moreOpen = !session._moreOpen; render(); });
+  const bd = document.getElementById('moreDrawerBackdrop'); if(bd) bd.addEventListener('click', (e)=>{ if(e.target===bd){ session._moreOpen=false; render(); } });
+  const dlo = document.getElementById('drawerLogoutBtn'); if(dlo) dlo.addEventListener('click', ()=>{ session._moreOpen=false; logout(); });
 }
 
 function renderPageInto(u){

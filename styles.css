@@ -172,3 +172,37 @@ tr:last-child td{border-bottom:none;}
   .topbar-title{font-size:16px;}
 }
 @media (max-width:520px){ .modal{border-radius:14px 14px 0 0; margin-top:auto; max-height:88vh;} .modal-backdrop{align-items:flex-end; padding:0;} }
+
+/* ---------- Mobile "More" drawer (keeps every nav item reachable on small screens) ---------- */
+.drawer-backdrop{position:fixed; inset:0; background:rgba(20,20,18,.5); z-index:90; display:flex; align-items:flex-end; justify-content:center;}
+.drawer-sheet{background:var(--surface); width:100%; max-width:640px; border-radius:16px 16px 0 0; padding:10px 12px calc(14px + env(safe-area-inset-bottom,0px)); max-height:75vh; overflow-y:auto; box-shadow:0 -10px 40px rgba(0,0,0,.25);}
+.drawer-handle{width:36px; height:4px; border-radius:3px; background:var(--border-strong); margin:4px auto 12px;}
+.drawer-item{font-size:14px; padding:12px; border-radius:10px;}
+.drawer-item.active{background:var(--brand-tint); color:var(--brand-dark);}
+
+/* ---------- Personal vs Team data toggle (used on Owners, My Units, Leads, Daily Reports) ---------- */
+.scope-tabs{display:flex; gap:6px; margin-bottom:16px; background:var(--surface-2); padding:4px; border-radius:10px; max-width:420px;}
+.scope-tab{flex:1; text-align:center; padding:8px 10px; border-radius:8px; border:none; background:none; font-size:12.5px; font-weight:700; color:var(--text-muted);}
+.scope-tab.active{background:var(--surface); color:var(--brand-dark); box-shadow:var(--shadow-card);}
+
+/* ---------- Contact action buttons (Reference directory: Call / WhatsApp) ---------- */
+.contact-actions{display:flex; gap:8px; flex-wrap:wrap;}
+.btn-call{background:var(--teal-tint); border-color:var(--teal-tint); color:var(--teal); text-decoration:none;}
+.btn-call:hover{background:var(--teal); color:#fff;}
+.btn-wa{background:#E7F7EE; border-color:#E7F7EE; color:#1F9254; text-decoration:none;}
+.btn-wa:hover{background:#25D366; color:#fff;}
+:root[data-theme="dark"] .btn-wa{background:#173023; color:#6FBE8F;}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .btn-wa{background:#173023; color:#6FBE8F;} }
+
+/* ---------- Searchable directory search box ---------- */
+.search-field{position:relative;}
+.search-field svg{position:absolute; left:11px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-faint);}
+.search-field input{padding-left:32px;}
+
+@media (max-width:620px){
+  table.responsive-stack thead{display:none;}
+  table.responsive-stack, table.responsive-stack tbody, table.responsive-stack tr, table.responsive-stack td{display:block; width:100%;}
+  table.responsive-stack tr{border-bottom:1px solid var(--border); padding:10px 0;}
+  table.responsive-stack td{border:none; padding:3px 0;}
+  table.responsive-stack td[data-label]::before{content:attr(data-label); display:block; font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--text-faint); font-weight:700;}
+}

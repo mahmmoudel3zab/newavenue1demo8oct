@@ -60,6 +60,12 @@ const TOP_ROLES = ['headofsales','ceo']; // company-wide, can view both teams
 function isAdmin(u){ return ADMIN_ROLES.includes(u.role); }
 function isMgmt(u){ return MGMT_ROLES.includes(u.role); }
 function isTopExec(u){ return TOP_ROLES.includes(u.role); }
+// CORE BUSINESS RULE: role !== sales activity. Every member of the sales hierarchy — a plain
+// salesperson AND every management role above them (team leader, sales manager, director,
+// head of sales, CEO) — can personally hold Owners, Units, Leads, a Daily Report and sales
+// activity of their own, in addition to whatever team/subordinate visibility their role grants.
+// Only the administrative roles (junior/senior/head admin) are not personally sales-active.
+function isSalesActive(u){ return u.role==='salesperson' || isMgmt(u); }
 
 /* ---------- Static reference lists ---------- */
 const COMPOUNDS_RES = ['Marina Bay Residences','Palm Hills Gardens','Sodic Waterway','Mivida Green Court','Zed East','Hyde Park Views','Al Rehab Extension','Cairo Gate'];
@@ -117,8 +123,13 @@ function getDownlineIds(users, rootId){
 /* ---------- Build demo units ---------- */
 function buildUnits(users){
   const units = [];
-  const salesRes = users.filter(u=>u.team==='residential' && u.role==='salesperson');
-  const salesCom = users.filter(u=>u.team==='commercial' && u.role==='salesperson');
+  // Management roles are ALSO salespeople (role !== sales activity) — team-assigned managers
+  // (team leader, sales manager, director) personally own Units too, not just their downline.
+  // Company-wide execs (headofsales/ceo, team:null) keep team-wide VISIBILITY via the
+  // Residential/Commercial view switcher but aren't given generated personal inventory here,
+  // matching the worked examples in the spec (Team Leader, Sales Manager).
+  const salesRes = users.filter(u=> isSalesActive(u) && u.team==='residential');
+  const salesCom = users.filter(u=> isSalesActive(u) && u.team==='commercial');
   function makeUnit(team, sp){
     const isRes = team==='residential';
     const total = rndInt(isRes?2800000:5200000, isRes?18500000:42000000);
@@ -198,7 +209,9 @@ function buildLeads(users, units){
     }
     return l;
   }
-  users.filter(u=>u.role==='salesperson').forEach(sp=>{
+  // Management roles are ALSO salespeople and personally work leads of their own, separate
+  // from the leads belonging to the salespeople underneath them.
+  users.filter(u=>isSalesActive(u) && u.team).forEach(sp=>{
     // guarantee 1-2 fresh leads per salesperson for demo
     leads.push(makeLead(sp.team, sp, true));
     if(rnd()<0.5) leads.push(makeLead(sp.team, sp, true));
@@ -239,13 +252,17 @@ function buildRequests(users, teamKey){
 }
 
 /* ---------- Build demo owners + real Owner<->Unit relationships ----------
-   An Owner is a real contact (name + normalized phone). A Unit belongs to
-   company Inventory (DB.units). The link between them — which salesperson
-   is working that owner on that specific unit, and that relationship's own
-   30-day update cycle — lives in DB.ownerUnits, never as a bare count on
-   the owner. One owner can have many active ownerUnits (unlimited units);
-   the 30-cap applies to distinct OWNERS per salesperson, counted from
-   DB.ownerUnits, not to units. */
+   An Owner is a real contact (name + normalized phone) that EXISTS INDEPENDENTLY of any
+   Unit — it is created on its own (owner.salespersonId is the salesperson who created/"owns"
+   this contact) and can later have zero, one, or many Units linked to it. A Unit belongs to
+   company Inventory (DB.units). The link between an Owner and a specific Unit — including
+   which salesperson is actively working that owner on that unit, and that relationship's own
+   30-day update cycle — lives in DB.ownerUnits. One owner can have many active ownerUnits
+   (unlimited units); the 30-cap applies to DISTINCT OWNERS a salesperson has (created or holds
+   a relationship for), never to units.
+   owner.sharedWith holds the ids of OTHER salespeople who were admin-approved to also work
+   this same owner contact (a "claim" with no specific unit yet) — this is how a cross-
+   salesperson claim is granted without ever silently duplicating the owner record. */
 function makeOwnerUnitRel(ownerId, unitId, salespersonId, lastUpdateDaysAgo){
   const lastUpdateAt = daysAgo(lastUpdateDaysAgo);
   return {
@@ -263,30 +280,38 @@ function buildOwnersAndRelationships(users, units){
   const usedPhones = new Set();
   function freshPhone(){
     let p;
-    do { p = '2001'+rndInt(0,2)+rndInt(10000000,99999999); } while(usedPhones.has(p));
+    // Canonical Egyptian format is 12 digits: "20" + the local number with its leading 0
+    // stripped (e.g. local "010XXXXXXXX" -> canonical "2010XXXXXXXX"). Must match what
+    // normalizeEgyptPhone() produces, or owner phone numbers silently fail to normalize.
+    do { p = '201'+rndInt(0,2)+rndInt(10000000,99999999); } while(usedPhones.has(p));
     usedPhones.add(p);
     return p;
   }
-  users.filter(u=>u.role==='salesperson').forEach(sp=>{
+  // Team-assigned sales-active users (salespeople AND their team leaders/managers/directors —
+  // role never removes personal sales activity) each personally create and hold some Owners.
+  users.filter(u=>isSalesActive(u) && u.team).forEach(sp=>{
     const spUnits = units.filter(un=>un.team===sp.team && un.ownerSalespersonId===sp.id);
-    if(!spUnits.length) return;
-    const ownerCount = Math.min(rndInt(2,5), spUnits.length);
+    const ownerCount = rndInt(2,5);
     const unitPool = [...spUnits];
     for(let i=0;i<ownerCount;i++){
-      const ownerUnitCount = unitPool.length ? Math.min(rndInt(1,3), unitPool.length) : 0;
-      if(!ownerUnitCount) break;
-      const takenUnits = unitPool.splice(0, ownerUnitCount);
       const phone = freshPhone();
       const owner = {
-        id: uid('o'), team: sp.team,
+        id: uid('o'), team: sp.team, salespersonId: sp.id, sharedWith: [],
         name: pick(FIRST_NAMES)+' '+pick(LAST_NAMES),
         phone, phone2: rnd()<0.3 ? freshPhone() : null,
         createdAt: daysAgo(rndInt(10,60))
       };
       owners.push(owner);
-      takenUnits.forEach(un=>{
-        ownerUnits.push(makeOwnerUnitRel(owner.id, un.id, sp.id, rndInt(0,32)));
-      });
+      // Most owners have at least one unit; some are deliberately left with zero units so the
+      // demo clearly shows "the Owner exists independently from the Units" (Add Unit is then
+      // the obvious next action on that owner's card).
+      const ownerUnitCount = unitPool.length && rnd()<0.8 ? Math.min(rndInt(1,3), unitPool.length) : 0;
+      if(ownerUnitCount){
+        const takenUnits = unitPool.splice(0, ownerUnitCount);
+        takenUnits.forEach(un=>{
+          ownerUnits.push(makeOwnerUnitRel(owner.id, un.id, sp.id, rndInt(0,32)));
+        });
+      }
     }
   });
   // force a couple of demo states: one relationship "soon", one "expired" (available for transfer)
@@ -300,28 +325,55 @@ function buildOwnersAndRelationships(users, units){
 function ownerUnitsFor(ownerId){ return DB.ownerUnits.filter(r=>r.ownerId===ownerId); }
 function activeOwnerUnitsFor(ownerId){ return ownerUnitsFor(ownerId).filter(r=>r.status==='active'); }
 function ownerUnitsForSalesperson(spId){ return DB.ownerUnits.filter(r=>r.salespersonId===spId && r.status==='active'); }
-// Count of DISTINCT owners this salesperson currently has an active relationship with (the 30-owner cap).
+// Every Owner this salesperson "has" — either they created/hold it (home salespersonId), they
+// were admin-approved to share it (sharedWith), or they have at least one active Unit
+// relationship for it. An owner with zero Units still counts once it's been created/shared.
+function ownersForSalesperson(spId){
+  const ids = new Set(ownerUnitsForSalesperson(spId).map(r=>r.ownerId));
+  DB.owners.forEach(o=>{ if(o.salespersonId===spId || (o.sharedWith||[]).includes(spId)) ids.add(o.id); });
+  return DB.owners.filter(o=>ids.has(o.id));
+}
+// Count of DISTINCT owners this salesperson currently "has" (the 30-owner cap — unlimited
+// units per owner never count against it, and an owner with zero units still counts once).
 function distinctOwnerCountForSalesperson(spId){
-  return new Set(ownerUnitsForSalesperson(spId).map(r=>r.ownerId)).size;
+  return ownersForSalesperson(spId).length;
 }
 function findOwnerByCanonicalPhone(canonical, team){
   if(!canonical) return null;
   return DB.owners.find(o=> o.team===team && (o.phone===canonical || o.phone2===canonical)) || null;
 }
-// Does this salesperson already have an active relationship (any unit) with this owner?
+// Does this salesperson already "have" this owner (home, shared, or an active unit relationship)?
 function salespersonHasOwner(spId, ownerId){
+  const o = DB.owners.find(x=>x.id===ownerId);
+  if(o && (o.salespersonId===spId || (o.sharedWith||[]).includes(spId))) return true;
   return DB.ownerUnits.some(r=>r.salespersonId===spId && r.ownerId===ownerId && r.status==='active');
 }
-// Is this owner currently active (has at least one active relationship) with some OTHER salesperson?
+// Is this owner currently "held" (home, shared, or an active relationship) by some OTHER salesperson?
 function ownerHeldByOthers(ownerId, excludingSpId){
+  const o = DB.owners.find(x=>x.id===ownerId);
+  if(!o) return false;
+  if(o.salespersonId && o.salespersonId!==excludingSpId) return true;
+  if((o.sharedWith||[]).some(id=>id!==excludingSpId)) return true;
   return DB.ownerUnits.some(r=>r.ownerId===ownerId && r.status==='active' && r.salespersonId!==excludingSpId);
 }
 
-/* ---------- Reference dictionary ---------- */
+/* ---------- Reference dictionary ----------
+   The Reference section is a SALESPERSON CONTACT DIRECTORY — not a general project/compound
+   reference sheet. Every sales-active person (plain salespeople AND every management role,
+   since role never removes personal sales activity) gets an entry with a distinct reference
+   code, their role, their manager/team-leader relationship, and SEPARATE phone/WhatsApp
+   numbers (they may differ) so the directory can offer real one-tap Call / WhatsApp actions. */
 function buildReferenceDict(users){
   const refs = [];
-  users.filter(u=>u.role==='salesperson' || u.role==='teamleader').forEach(u=>{
-    refs.push({id:uid('rf'), team:u.team, code: (u.team==='residential'?'RES-':'COM-')+u.id.toUpperCase(), name:u.name, phone:'01'+rndInt(0,2)+rndInt(10000000,99999999), whatsapp:'+2001'+rndInt(0,2)+rndInt(10000000,99999999), note: ROLE_LABELS[u.role]});
+  users.filter(u=>isSalesActive(u) && u.team).forEach(u=>{
+    const mgr = users.find(m=>m.id===u.managerId);
+    refs.push({
+      id: uid('rf'), team: u.team, userId: u.id,
+      code: (u.team==='residential'?'RES-':'COM-')+u.id.toUpperCase(),
+      name: u.name, role: u.role, managerId: u.managerId, managerName: mgr?mgr.name:null,
+      phone: '01'+rndInt(0,2)+rndInt(10000000,99999999),
+      whatsapp: '01'+rndInt(0,2)+rndInt(10000000,99999999),
+    });
   });
   return refs;
 }
@@ -348,7 +400,7 @@ function buildDemoData(){
     // Daily Performance Report launches from zero on 2026-11-01 — intentionally empty, no historical import.
     dailyReports: [],
     notifications: [], auditLog: [],
-    meta: { version: 2 }
+    meta: { version: 3 }
   };
 }
 
@@ -448,7 +500,7 @@ function monthlyTotals(reports){
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===2) return parsed; }
+    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===3) return parsed; }
   }catch(e){ console.warn('load failed', e); }
   // Version 1 (bare owner "units" count, no Daily Report module) is superseded by the
   // real Owner<->Unit relationship model — demo data is regenerated rather than migrated,

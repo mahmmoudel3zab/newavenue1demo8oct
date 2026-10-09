@@ -30,6 +30,19 @@ function myTeamKey(u, overrideTeam){
 function requestsFor(teamKey){ return DB.requests[teamKey] || []; }
 
 function visibleUnits(u){ const tk = myTeamKey(u); return DB.units.filter(x=>x.team===tk); }
+
+/* =========================================================
+   PERSONAL ("My") vs TEAM data
+   This separation is load-bearing: a management user's own Owners/Units/Leads/Daily Reports
+   must never be mixed together with the ones belonging to the salespeople underneath them.
+   "My X" = records personally created/owned by the logged-in user, full stop, regardless of
+   role. "Team X" = the same kind of record belonging to the user's DOWNLINE ONLY (never
+   including the user's own), and only meaningful for management roles.
+   ========================================================= */
+function downlineIds(u){ return getDownlineIds(DB.users, u.id); }
+
+function myLeads(u){ return DB.leads.filter(l=>l.salespersonId===u.id); }
+function teamLeads(u){ const down = new Set(downlineIds(u)); return DB.leads.filter(l=>down.has(l.salespersonId)); }
 function visibleLeads(u){
   const tk = myTeamKey(u);
   let pool = DB.leads.filter(l=>l.team===tk);
@@ -51,6 +64,24 @@ function visibleOwners(u){
   const relIds = new Set(visibleOwnerUnits(u).filter(r=>r.status==='active').map(r=>r.ownerId));
   return DB.owners.filter(o=>relIds.has(o.id));
 }
+// My Owners: the owners THIS user personally created/holds (home, shared-by-approval, or has
+// an active unit relationship for) — unlimited units per owner, zero units allowed.
+function myOwners(u){ return ownersForSalesperson(u.id); }
+// Team Owners: the owners belonging to this user's DOWNLINE only — never mixed with My Owners,
+// even when an owner happens to also be shared with the manager themselves (excluded here).
+function teamOwners(u){
+  const down = new Set(downlineIds(u));
+  const mine = new Set(myOwners(u).map(o=>o.id));
+  const ids = new Set();
+  DB.owners.forEach(o=>{
+    if(mine.has(o.id)) return;
+    if(down.has(o.salespersonId) || (o.sharedWith||[]).some(id=>down.has(id))) ids.add(o.id);
+  });
+  DB.ownerUnits.filter(r=>r.status==='active' && down.has(r.salespersonId)).forEach(r=>{ if(!mine.has(r.ownerId)) ids.add(r.ownerId); });
+  return DB.owners.filter(o=>ids.has(o.id));
+}
+function myUnits(u){ return DB.units.filter(x=>x.ownerSalespersonId===u.id); }
+function teamUnits(u){ const down = new Set(downlineIds(u)); return DB.units.filter(x=>down.has(x.ownerSalespersonId)); }
 // ownerExpiryState takes a raw timestamp (an Owner<->Unit relationship's lastUpdateAt) —
 // this is the relationship-level 30-day cycle, using the same 25/30-day soon/expired rule
 // that previously applied to the whole owner.
@@ -99,7 +130,8 @@ function navItems(u){
     {key:'requests', label:'Requests', icon:'requests', badge: ()=>unreadCountFor(u)},
     {key:'owners', label:'Owners', icon:'owners'}
   );
-  if(u.role==='salesperson') items.push({key:'reports', label:'Daily Reports', icon:'calendar', badge: ()=> { const ds=effectiveTodayStr(); return reportStatusOf(u.id, ds)==='missing' && isOnOrAfterLaunch(ds) ? 1 : 0; }});
+  // Daily Reports: every sales-active person files their OWN report — role never removes this.
+  if(isSalesActive(u)) items.push({key:'reports', label:'Daily Reports', icon:'calendar', badge: ()=> { const ds=effectiveTodayStr(); return reportStatusOf(u.id, ds)==='missing' && isOnOrAfterLaunch(ds) ? 1 : 0; }});
   items.push(
     {key:'reference', label:'Reference', icon:'reference'},
     {key:'notifications', label:'Notifications', icon:'notif', badge: ()=>unreadNotifCount(u)}
@@ -108,5 +140,18 @@ function navItems(u){
   items.push({key:'profile', label:'Profile', icon:'profile'});
   return items;
 }
-const MOBILE_TABS = ['dashboard','inventory','reports','requests','profile'];
+// Mobile bottom bar: a fixed 4 slots + a "More" drawer. This is NOT a reduced-feature mode —
+// every item from navItems() is reachable, either directly or one tap into the "More" sheet
+// (explicitly allowed by spec: "If there is not enough room... use a More menu. But ALL core
+// features must remain accessible."). Owners, My Units AND Reference get fixed, always-visible
+// slots since they were specifically called out as never to be hidden/removed on mobile;
+// everything else (Daily Reports, Notifications, Admin, Leads if enabled, Profile) lives in More.
+const MOBILE_TABS = ['dashboard','owners','myunits','reference'];
+function mobileMoreItems(u){
+  const items = navItems(u);
+  return items.filter(it=> !MOBILE_TABS.includes(it.key));
+}
+function mobileMoreBadgeTotal(u){
+  return mobileMoreItems(u).reduce((sum,it)=> sum + (it.badge?Number(it.badge())||0:0), 0);
+}
 
