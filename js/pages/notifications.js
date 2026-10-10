@@ -1,7 +1,7 @@
 /* =========================================================
    NOTIFICATIONS
    ========================================================= */
-const NOTIF_ICON = {fresh_lead:'leads', unread_requests:'requests', owner_refresh:'owners', reminder:'clock', system:'notif', daily_report_missing:'calendar'};
+const NOTIF_ICON = {fresh_lead:'leads', unread_requests:'requests', owner_refresh:'owners', reminder:'clock', system:'notif', daily_report_missing:'calendar', announcement:'announce'};
 function renderNotificationsPage(u){
   const list = myNotifications(u);
   return `<div class="card">${list.length? list.map(n=>`
@@ -22,6 +22,7 @@ AFTER_RENDER.notifications = function(u){
     if(!n) return;
     n.read = true; persist();
     if(n.meta && n.meta.date) session._reportDate = n.meta.date;
+    if(n.meta && n.meta.announcementId) session._openAnnouncementId = n.meta.announcementId;
     if(n.link) go(n.link); else renderPageInto(u);
   }));
 };

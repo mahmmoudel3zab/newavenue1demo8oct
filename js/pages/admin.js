@@ -29,6 +29,7 @@ const ADMIN_ROLE_FILTER_GROUPS = [
   ['salesperson','Salesperson'],['teamleader','Team Leader'],['manager','Sales Manager'],
   ['director','Director'],['headofsales','Head of Sales'],['ceo','CEO'],
   ['junioradmin','Junior Admin'],['senioradmin','Senior Admin'],['headadmin','Head Admin'],
+  ['headhr','Head of HR'],
 ];
 function renderAdminUsers(u){
   const canManage = canManageUsers(u);

@@ -139,6 +139,10 @@ function navItems(u){
     {key:'reference', label:'Reference', icon:'reference'},
     {key:'notifications', label:'Notifications', icon:'notif', badge: ()=>unreadNotifCount(u)}
   );
+  // Company Announcements: the compose/send screen is reachable from navigation ONLY for Head of
+  // HR — every other employee only ever reaches it by clicking the notification an announcement
+  // generates (see notifications.js), never from a nav item of their own.
+  if(isHeadHR(u)) items.push({key:'announcements', label:'Company Announcements', icon:'announce'});
   if(isAdmin(u)) items.push({key:'admin', label:'Admin', icon:'admin'});
   items.push({key:'profile', label:'Profile', icon:'profile'});
   return items;

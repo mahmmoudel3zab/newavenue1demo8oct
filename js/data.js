@@ -51,15 +51,20 @@ function initials(name){ return name.split(' ').map(w=>w[0]).slice(0,2).join('')
 const ROLE_LABELS = {
   salesperson:'Salesperson', teamleader:'Team Leader', manager:'Sales Manager',
   director:'Director', headofsales:'Head of Sales', ceo:'CEO',
-  junioradmin:'Junior Admin', senioradmin:'Senior Admin', headadmin:'Head Admin'
+  junioradmin:'Junior Admin', senioradmin:'Senior Admin', headadmin:'Head Admin',
+  headhr:'Head of HR'
 };
 const MGMT_ROLES = ['teamleader','manager','director','headofsales','ceo'];
 const ADMIN_ROLES = ['junioradmin','senioradmin','headadmin'];
 const TOP_ROLES = ['headofsales','ceo']; // company-wide, can view both teams
+const HR_ROLES = ['headhr'];
 
 function isAdmin(u){ return ADMIN_ROLES.includes(u.role); }
 function isMgmt(u){ return MGMT_ROLES.includes(u.role); }
 function isTopExec(u){ return TOP_ROLES.includes(u.role); }
+// Head of HR is its own, separate role — not a sales role and not part of the admin hierarchy
+// (ADMIN_ROLES/isAdmin). It exists only to own the Company Announcements feature below.
+function isHeadHR(u){ return HR_ROLES.includes(u.role); }
 // CORE BUSINESS RULE: role !== sales activity. Every member of the sales hierarchy — a plain
 // salesperson AND every management role above them (team leader, sales manager, director,
 // head of sales, CEO) — can personally hold Owners, Units, Leads, a Daily Report and sales
@@ -110,6 +115,9 @@ function buildUsers(){
   add('ja1','Salma Ezz','junioradmin',null,null);
   add('sa1','Mostafa Reda','senioradmin',null,null);
   add('ha1','Laila Mansour','headadmin',null,null);
+  // Human Resources — a separate function from the admin hierarchy above; this is the only
+  // account the Company Announcements compose screen is available to (see pages/announcements.js).
+  add('hr1','Yasmin Adly','headhr',null,null);
   return u;
 }
 
@@ -438,7 +446,7 @@ function refManager(r){ const u = refUser(r); return u ? DB.users.find(x=>x.id==
    user, changes a role, reassigns a manager, or switches a department — so Reference, My/Team
    data visibility, and every other screen that reads DB.users/DB.refs stay consistent without
    needing their own separate "did this change?" logic. */
-const ADMIN_ASSIGNABLE_ROLES = ['salesperson','teamleader','manager','director','headofsales','ceo','junioradmin','senioradmin','headadmin'];
+const ADMIN_ASSIGNABLE_ROLES = ['salesperson','teamleader','manager','director','headofsales','ceo','junioradmin','senioradmin','headadmin','headhr'];
 // Only Senior Admin and Head Admin may manage user accounts, roles and hierarchy — Junior Admin
 // stays operational-only (inventory/owners), matching the existing admin tiering.
 function canManageUsers(u){ return isAdmin(u) && (u.role==='senioradmin' || u.role==='headadmin'); }
@@ -496,8 +504,11 @@ function buildDemoData(){
     // collection from dailyReports (the full salesperson form), never mixed with it. Also
     // starts empty; one row per management user per date.
     mgmtReports: [],
+    // Company-wide Announcements (Head of HR only can create/send — see isHeadHR() and
+    // pages/announcements.js). Starts empty; one row per sent announcement, newest first in use.
+    announcements: [],
     notifications: [], auditLog: [],
-    meta: { version: 4 }
+    meta: { version: 5 }
   };
 }
 
@@ -634,10 +645,43 @@ function mgmtReportsForUser(userId){
   return DB.mgmtReports.filter(r=>r.userId===userId).sort((a,b)=> a.date<b.date?1:-1);
 }
 
+/* =========================================================
+   Company Announcements (Head of HR only — see isHeadHR())
+   A simple, HR-authored broadcast: title + free-text message. Sending one creates exactly one
+   DB.announcements row and, using the EXISTING notification system (notify(), DB.notifications —
+   the same mechanism every other notification in this app already uses, not a new or simulated
+   delivery layer), one real in-app notification for every other employee. notify()'s existing
+   `key` de-duplication guarantees each employee gets exactly one notification per announcement,
+   even if sendAnnouncement were ever called twice for the same id. Employees read the full
+   message by clicking that notification (see notifications.js + pages/announcements.js), and a
+   full send history is kept in DB.announcements for the Head of HR to review at any time.
+   ========================================================= */
+function announcementsHistory(){
+  return DB.announcements.slice().sort((a,b)=> b.at-a.at);
+}
+function getAnnouncement(id){
+  return DB.announcements.find(a=>a.id===id) || null;
+}
+// Sends a company-wide announcement AND the real notifications that go with it, in one atomic
+// step — there is no "sent" state that isn't backed by both the announcement record and an
+// actual notification per recipient; this app has no separate server to fail independently of
+// the local persistence both already share (persist()), so there is nothing here that could
+// report success while silently not delivering.
+function sendAnnouncement(author, title, message){
+  const a = { id: uid('an'), title, message, byId: author.id, at: now() };
+  DB.announcements.unshift(a);
+  DB.users.filter(u=>u.id!==author.id).forEach(u=>{
+    notify(u.id, 'announcement', 'New company announcement: '+title, 'announcements', 'announcement_'+a.id, {announcementId:a.id});
+  });
+  log(author.id, 'announcement_sent', {announcementId:a.id, title});
+  persist();
+  return a;
+}
+
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===4) return parsed; }
+    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===5) return parsed; }
   }catch(e){ console.warn('load failed', e); }
   // Version 1 (bare owner "units" count, no Daily Report module) is superseded by the
   // real Owner<->Unit relationship model — demo data is regenerated rather than migrated,

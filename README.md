@@ -583,3 +583,106 @@ code path (not a mock of it), so the logic is verified against the actual source
 pass is still worth doing before this goes in front of real users.
 
 ---
+
+## 14. Company Announcements (Head of HR)
+
+A new, separate "Head of HR" account/role can compose and send company-wide announcements —
+official holidays, policy changes, important updates — to every other employee as a real in-app
+notification, which they can click any time to read the full message. Nothing about the existing
+admin hierarchy, sales roles, or any other feature was changed to add this; it's a new role, a new
+page, and new hooks into the notification system that already existed.
+
+### What was added
+
+- **A new role, `headhr`** (`ROLE_LABELS`, `HR_ROLES`, `isHeadHR(u)` in `js/data.js`) — deliberately
+  **separate from `ADMIN_ROLES`/`isAdmin`**, since HR managing announcements isn't the same
+  authority as the Junior/Senior/Head Admin hierarchy that already exists, and separate from
+  `MGMT_ROLES`/`isSalesActive`, since Head of HR doesn't sell and shouldn't get a Reference entry,
+  Owners, Units, or a Daily Report. One demo account, `Yasmin Adly` (`hr1`), is seeded with this
+  role. It's also added to `ADMIN_ASSIGNABLE_ROLES` and given a label in the Admin → Users screen
+  from §12, so a Senior/Head Admin can promote or reassign who holds the Head of HR role the same
+  way they manage every other role — `roleTeamApplicable('headhr')` is `false`, since HR has no
+  Residential/Commercial team.
+- **"Company Announcements" nav item — visible only to Head of HR** (`navItems()` in
+  `js/session.js`). No other account sees it in their sidebar, mobile "More" drawer, or anywhere
+  else in navigation; an ordinary employee only ever reaches the page by clicking the notification
+  an announcement generates for them (see below) — exactly as the spec asked for ("accessible only
+  to the Head of HR for creating and sending").
+- **A new page, `js/pages/announcements.js`**, built entirely from the app's existing components
+  (`.card`, `.card-pad`, `.field`/`.field-label`, `.btn`/`.btn-primary`, `.badge-fresh`,
+  `.empty-state`) — no new CSS was needed, so it automatically matches the existing button sizes,
+  colors and spacing everywhere else in the app. For Head of HR, it shows a compose form (Title +
+  Message) above a full send history; for every other employee, it shows a read-only history list
+  they can click to expand and read in full. The page works identically on desktop and mobile —
+  it's a normal page in the same single-column-on-mobile / sidebar-on-desktop layout as the rest of
+  the app, reachable on mobile through the "More" drawer for Head of HR, and through the
+  notification itself for everyone else.
+- **Sending uses the existing notification system — nothing new, nothing simulated.**
+  `sendAnnouncement(author, title, message)` in `js/data.js` does exactly two things, atomically:
+  (1) pushes one row to a new `DB.announcements` collection (the send history), and (2) calls the
+  **exact same `notify()` function** every other notification in this app already uses — once per
+  other employee — which pushes a real row into `DB.notifications`, the same collection the
+  Notifications page already reads. There is no separate "delivery" step that could silently fail
+  while reporting success: this demo has no server for a notification to fail to reach, so the
+  local `persist()` that already backs every other feature is what "sent" means here too, exactly
+  as it already did for Daily Reports, Requests, and everything else — nothing about this claims a
+  real push notification or a backend delivery guarantee that doesn't exist in this project.
+  `notify()`'s existing `key`-based de-duplication (`'announcement_'+a.id`) means even a
+  double-invocation can never double-notify anyone.
+- **Employees read it via the real notification, any time, not just once.**
+  `js/pages/notifications.js`'s existing click handler — unchanged except for one new `if` branch
+  — stores which announcement to open (`session._openAnnouncementId`) when a notification carries
+  `meta.announcementId`, then navigates via the notification's existing `link` field (same
+  mechanism the Daily-Report-missing notification already used to deep-link to a specific date).
+  `AFTER_RENDER.announcements` auto-expands that specific announcement once on arrival, then clears
+  the flag so it doesn't keep forcing itself open — and because every sent announcement stays in
+  the visible history afterward, an employee can go back and re-read any past announcement at any
+  time from the Company Announcements page itself, not only right when it first arrives.
+- **History, for both sides.** `announcementsHistory()` returns every sent announcement, newest
+  first; `getAnnouncement(id)` resolves one by id. Head of HR's view of the history additionally
+  shows how many employees each one was sent to, as a simple send-confirmation record.
+
+### What was tested, and how
+
+A new Node harness (same method as §§11–13 — real source loaded with `vm.runInThisContext` against
+real `buildDemoData()`-generated data, driving the real DOM-shim for the compose-form flow):
+**42 assertions passed, 0 failed**, covering:
+
+- The Head of HR role exists exactly once in demo data, is excluded from the admin hierarchy and
+  from every sales-active/management check, and `isHeadHR` correctly identifies only that account.
+- The "Company Announcements" nav item appears for Head of HR and for no one else (checked against
+  an ordinary salesperson and against Head Admin specifically, since admin and HR are easy to
+  conflate and are deliberately kept separate).
+- The compose form (title/message/send button) renders only for Head of HR; an ordinary employee's
+  rendered page HTML never contains the compose button at all — not just hidden by CSS, genuinely
+  absent from the markup.
+- Sending an announcement creates exactly one `DB.announcements` row and exactly one real
+  `DB.notifications` row per OTHER employee (not the sender), each unread, each correctly typed,
+  each carrying the announcement's id — and a repeat `notify()` call with the same key does not
+  create duplicates.
+- History is returned newest-first and `getAnnouncement` resolves correctly.
+- The full employee read path end-to-end: the notification text references the announcement title,
+  clicking it marks it read, stores the right id to auto-open, and navigates to the announcements
+  page; arriving there auto-expands that specific announcement and reveals the **full** message
+  text (not just the notification's short text); the auto-open flag then clears itself; and the
+  employee can manually collapse/re-expand and re-read that same announcement again later.
+- Compose-form validation: an empty title is rejected, an empty message is rejected, declining the
+  confirmation dialog sends nothing, and confirming actually creates the announcement and the real
+  notifications — with a genuine confirmation dialog shown first, not a silent send.
+- Role-management integration: `headhr` is admin-assignable with a proper label, requires no
+  team, and promoting an existing user to Head of HR through the admin tooling from §12 does not
+  incorrectly create a Reference/sales entry for them.
+- Full regression: all 136 assertions across every harness from this round and all prior rounds
+  (§§11–13) were re-run together after this addition — all still pass. `node --check` passes on
+  every file under `js/`.
+
+### What was *not* independently verified
+
+Same caveat as every prior round: no graphical browser was available in this sandbox, so the
+actual visual appearance and the mobile "More" drawer/notification-tap flow were not clicked
+through by hand. The harness above drives the real rendering functions and the real event-handling
+code paths (not a simulation of them), so the logic, the notification plumbing, and the DB
+mutations are verified against the actual source; a real-browser pass on desktop and mobile is
+still worth doing before this goes in front of real users.
+
+---

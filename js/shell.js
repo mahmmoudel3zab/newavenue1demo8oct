@@ -24,6 +24,7 @@ const LOGIN_GROUPS = [
   {label:'Commercial Team', ids:['s4','s5','s7','tl2','m2','dir2']},
   {label:'Company Leadership', ids:['hos1','ceo1']},
   {label:'Administration', ids:['ja1','sa1','ha1']},
+  {label:'Human Resources', ids:['hr1']},
 ];
 function renderLogin(){
   const q = (session._loginSearch||'').trim().toLowerCase();
@@ -195,7 +196,7 @@ function renderPageInto(u){
     dashboard: renderDashboard, leads: renderLeadsPage, inventory: renderInventoryPage,
     myunits: renderMyUnitsPage, requests: renderRequestsPage, owners: renderOwnersPage,
     reference: renderReferencePage, notifications: renderNotificationsPage, admin: renderAdminPage,
-    profile: renderProfilePage, reports: renderDailyReportPage
+    profile: renderProfilePage, reports: renderDailyReportPage, announcements: renderAnnouncementsPage
   };
   const fn = renderers[session.page] || renderDashboard;
   root.innerHTML = fn(u);
