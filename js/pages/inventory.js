@@ -18,7 +18,7 @@ function renderInventoryPage(u){
   const tk = myTeamKey(u);
   const unitTypes = tk==='residential'?UNIT_TYPES_RES:UNIT_TYPES_COM;
   const f = session.invFilters;
-  let list = DB.units.filter(x=>x.team===tk);
+  let list = DB.units.filter(x=>x.team===tk && !x.deletedAt);
   if(session.invSearch){
     const q = session.invSearch.toLowerCase();
     list = list.filter(x=> (x.compound+x.developer+x.area).toLowerCase().includes(q));
@@ -91,28 +91,33 @@ function filterGroup(label, key, opts, selected){
     ${opts.map(([val,text])=>`<button class="chip-select ${selected.includes(val)?'on':''}" data-filter-key="${key}" data-filter-val="${val}">${text}</button>`).join('')}
     </div></div>`;
 }
+// Markup uses dedicated uc-* classes (instead of inline styles) specifically so Part 7's mobile
+// compacting can be done entirely in CSS (see .unit-card / .uc-* rules in css/styles.css) —
+// inline styles can't be overridden by a media query. Desktop appearance is unchanged; only the
+// mobile breakpoints shrink photo height, padding and font sizes so more units fit with less
+// scrolling, without dropping any field.
 function unitCard(un){
   const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
-  return `<div class="card unit-card" data-unit="${un.id}" style="overflow:hidden; cursor:pointer;">
-    <div class="scrim-photo" style="border-radius:0; aspect-ratio:16/10;">${un.photos} photos</div>
-    <div class="card-pad" style="padding-top:12px;">
-      <div style="display:flex; justify-content:space-between; gap:6px;">
-        <div style="font-weight:800; font-size:13.5px;">${esc(un.compound)}</div>
+  return `<div class="card unit-card" data-unit="${un.id}">
+    <div class="scrim-photo uc-photo">${un.photos} photos</div>
+    <div class="card-pad uc-body">
+      <div class="uc-toprow">
+        <div class="uc-title">${esc(un.compound)}</div>
         ${un.pending?'<span class="badge badge-pending">Pending</span>':''}
       </div>
-      <div style="font-size:11.5px; color:var(--text-faint); margin:2px 0 8px;">${esc(un.unitType)} · ${esc(un.area)} · ${un.saleRent}</div>
-      <div style="display:flex; gap:10px; font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+      <div class="uc-subline">${esc(un.unitType)} · ${esc(un.area)} · ${un.saleRent}</div>
+      <div class="uc-specs">
         ${un.bedrooms!=null?`<span>${ic('bed')} ${un.bedrooms}</span>`:''}
         <span>${ic('bath')} ${un.bathrooms}</span>
         <span>${ic('area')} ${un.areaSize}m²</span>
         ${un.garden?`<span>🌿 ${un.garden}m²</span>`:''}
       </div>
-      <div class="divider" style="margin:8px 0;"></div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11.5px;">
-        <div><div style="color:var(--text-faint);">Down payment</div><div style="font-weight:800;">${fmtMoney(un.downPayment)}</div></div>
-        <div><div style="color:var(--text-faint);">Total price</div><div style="font-weight:800;">${fmtMoney(un.totalPrice)}</div></div>
-        <div><div style="color:var(--text-faint);">Remaining</div><div style="font-weight:700;">${fmtMoney(un.remainingAmount)}</div></div>
-        <div><div style="color:var(--text-faint);">Installments</div><div style="font-weight:700;">${un.remainingInstallments} mo</div></div>
+      <div class="divider uc-divider"></div>
+      <div class="uc-pricegrid">
+        <div><div class="uc-pricelabel">Down payment</div><div class="uc-priceval">${fmtMoney(un.downPayment)}</div></div>
+        <div><div class="uc-pricelabel">Total price</div><div class="uc-priceval">${fmtMoney(un.totalPrice)}</div></div>
+        <div><div class="uc-pricelabel">Remaining</div><div class="uc-pricesub">${fmtMoney(un.remainingAmount)}</div></div>
+        <div><div class="uc-pricelabel">Installments</div><div class="uc-pricesub">${un.remainingInstallments} mo</div></div>
       </div>
     </div>
   </div>`;
@@ -158,6 +163,7 @@ function recordInteraction(un, u, type){
 }
 function openUnitModal(unitId, u){
   const un = DB.units.find(x=>x.id===unitId);
+  if(!un || un.deletedAt){ toast('This unit is no longer available.'); return; }
   const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
   const spRef = sp ? DB.refs.find(r=>r.userId===sp.id) : null;
   recordInteraction(un, u, 'views');

@@ -23,10 +23,10 @@ function renderOwnersPage(u){
   const ownerCount = myList.length;
   const atCap = salesActive && ownerCount>=30;
 
-  const availablePool = salesActive ? DB.ownerUnits.filter(r=>
-    r.status==='active' && r.salespersonId!==u.id && ownerExpiryState(r.lastUpdateAt)==='expired' &&
-    (DB.owners.find(o=>o.id===r.ownerId)||{}).team===tk
-  ) : [];
+  // Available Pool (self-service browsing/claiming of expired relationships) is Head-Admin-only
+  // as of Part 4 of this round — it no longer appears anywhere on the normal salesperson Owners
+  // page. The equivalent management view/action now lives on the Admin > Available Pool tab
+  // (see pages/admin.js), enforced there by role, not just by this page omitting the section.
 
   const scopeTabs = mgmt ? `<div class="scope-tabs">
       <button class="scope-tab ${scope==='my'?'active':''}" data-ownerscope="my">My Owners (${myList.length})</button>
@@ -45,9 +45,6 @@ function renderOwnersPage(u){
   <div class="card" style="margin-bottom:18px;">
     ${list.length? list.map(o=>ownerCard(o,u,scope)).join('') : emptyRow(scope==='my' ? 'No owners yet — click "Add owner" to create your first one.' : 'No team owners yet.')}
   </div>
-  ${salesActive && scope==='my' ? `<div class="section-title" style="margin-top:20px;">Available pool</div>
-  <div class="section-sub">Specific owner-unit relationships that became available because that relationship wasn't updated in time — claiming one does not affect the owner's other units</div>
-  <div class="card">${availablePool.length? availablePool.map(r=>ownerAvailableRow(r,u)).join('') : emptyRow('No relationships currently available.')}</div>` : ''}
   `;
 }
 
@@ -68,6 +65,7 @@ function ownerCard(o,u,scope){
         ${rels.length ? `<button class="btn btn-sm" data-toggleunits="${o.id}">${ic('chevDown')} ${expanded?'Hide':'View'} units</button>` : ''}
         ${canEdit ? `<button class="btn btn-sm" data-addunit="${o.id}">${ic('plus')} Add unit</button>` : ''}
         ${canEdit ? `<button class="btn btn-sm btn-ghost" data-editowner="${o.id}">${ic('edit')} Edit</button>` : ''}
+        ${isMine ? `<button class="btn btn-sm btn-danger" data-deleteowner="${o.id}">${ic('x')} Delete</button>` : ''}
       </div>
     </div>
     ${expanded && rels.length ? `<div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
@@ -89,17 +87,6 @@ function relationChip(r,u){
     ${canUpdate ? `<button class="btn btn-sm" data-updaterel="${r.id}">${ic('refresh')} Update</button>` : ''}
   </div>`;
 }
-function ownerAvailableRow(r,u){
-  const o = DB.owners.find(x=>x.id===r.ownerId);
-  const unit = DB.units.find(x=>x.id===r.unitId);
-  const prevSp = DB.users.find(x=>x.id===r.salespersonId);
-  const pending = DB.transfers.find(t=>t.ownerUnitId===r.id && t.status==='pending');
-  return `<div style="display:flex; align-items:center; gap:12px; padding:13px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
-    <span class="avatar" style="background:${avatarColor(o?o.name:'?')}; width:34px;height:34px;">${initials(o?o.name:'?')}</span>
-    <div style="flex:1;"><div style="font-weight:700; font-size:13px;">${esc(o?o.name:'—')} · ${esc(unitLabel(unit))}</div><div style="font-size:11.5px; color:var(--text-faint);">Previously with ${esc(prevSp?prevSp.name:'—')} · Not updated for ${daysBetween(r.lastUpdateAt)} days</div></div>
-    ${pending ? `<span class="badge badge-pending">Transfer pending admin approval</span>` : `<button class="btn btn-sm btn-primary" data-claimrel="${r.id}">Request transfer</button>`}
-  </div>`;
-}
 
 AFTER_RENDER.owners = function(u){
   document.querySelectorAll('[data-ownerscope]').forEach(b=> b.addEventListener('click', ()=>{ session._ownersScope=b.dataset.ownerscope; renderPageInto(u); }));
@@ -113,12 +100,20 @@ AFTER_RENDER.owners = function(u){
   }));
   document.querySelectorAll('[data-addunit]').forEach(b=> b.addEventListener('click', ()=> openAddUnitToOwnerModal(b.dataset.addunit, u)));
   document.querySelectorAll('[data-editowner]').forEach(b=> b.addEventListener('click', ()=> openEditOwnerModal(b.dataset.editowner, u)));
-  document.querySelectorAll('[data-claimrel]').forEach(b=> b.addEventListener('click', ()=>{
-    const rel = DB.ownerUnits.find(x=>x.id===b.dataset.claimrel);
-    if(!rel) return;
-    DB.transfers.push({id:uid('tr'), type:'transfer', ownerUnitId:rel.id, ownerId:rel.ownerId, unitId:rel.unitId, fromSalespersonId:rel.salespersonId, toSalespersonId:u.id, status:'pending', at:now()});
-    log(u.id,'owner_transfer_requested',{ownerUnitId:rel.id});
-    persist(); toast('Transfer requested for this unit — awaiting admin approval'); renderPageInto(u);
+  document.querySelectorAll('[data-deleteowner]').forEach(b=> b.addEventListener('click', ()=>{
+    const owner = DB.owners.find(x=>x.id===b.dataset.deleteowner);
+    if(!owner) return;
+    if(!salespersonHasOwner(u.id, owner.id)){ toast('You can only delete an owner that belongs to your own account'); return; }
+    const rels = activeOwnerUnitsFor(owner.id);
+    const ok = confirm(
+      `Remove ${owner.name} from your Owners list?\n\n` +
+      `This removes them from your normal working list — their contact details, call/update history and all ${rels.length} linked unit${rels.length===1?'':'s'} are kept safely and are NOT deleted. Units stay exactly as they are; only this owner's visibility to you changes.\n\n` +
+      `Only a Head Admin can restore a removed owner.`
+    );
+    if(!ok) return;
+    softDeleteOwner(owner, u.id);
+    log(u.id,'owner_soft_deleted',{ownerId:owner.id});
+    persist(); toast('Owner removed from your list'); session._expandedOwner=null; renderPageInto(u);
   }));
   const ab = document.getElementById('addOwnerBtn'); if(ab) ab.addEventListener('click', ()=> openAddOwnerModal(u));
 };
@@ -253,7 +248,7 @@ function wireOwnerDupWarningEvents(u, tk, getNamePhones){
       const { name, canonical, canonical2 } = getNamePhones();
       if(!name){ toast('Owner name is required'); return; }
       if(!canonical){ toast('Enter a valid phone number'); return; }
-      const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), duplicateOverride:{of:ctx.ownerId, reason:reason.trim(), by:u.id, at:now()}};
+      const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), deletedAt:null, deletedBy:null, duplicateOverride:{of:ctx.ownerId, reason:reason.trim(), by:u.id, at:now()}};
       DB.owners.push(owner);
       log(u.id,'owner_added_duplicate_override',{ownerId:owner.id, matchedOwnerId:ctx.ownerId, reason:reason.trim()});
       persist(); closeModal(); toast('Separate owner record created (administrative exception)'); session._expandedOwner=null; renderPageInto(u);
@@ -318,6 +313,11 @@ function openAddOwnerModal(u){
       canonical2 = normalizeEgyptPhone(rawPhone2);
       if(!canonical2){ toast('Second phone is not a valid Egyptian number'); return; }
     }
+    const archived = findArchivedOwnerByCanonicalPhone(canonical, tk) || (canonical2 && findArchivedOwnerByCanonicalPhone(canonical2, tk));
+    if(archived){
+      toast('This phone number belongs to a removed (deleted) owner record. Ask a Head Admin to restore it before it can be used again.');
+      return;
+    }
     const existing = findOwnerByCanonicalPhone(canonical, tk) || (canonical2 && findOwnerByCanonicalPhone(canonical2, tk));
     if(existing && salespersonHasOwner(u.id, existing.id)){
       closeModal(); toast('You already have this owner in your list'); session._expandedOwner=existing.id; renderPageInto(u);
@@ -333,7 +333,7 @@ function openAddOwnerModal(u){
     if(distinctOwnerCountForSalesperson(u.id)>=30){
       toast('You are at the 30 active owner limit — remove an owner before adding a new one'); return;
     }
-    const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now()};
+    const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), deletedAt:null, deletedBy:null};
     DB.owners.push(owner);
     log(u.id,'owner_added',{ownerId:owner.id});
     persist(); closeModal(); toast('Owner added — link a unit whenever you’re ready'); session._expandedOwner=null; renderPageInto(u);
@@ -346,7 +346,7 @@ function openAddUnitToOwnerModal(ownerId, u){
   if(!o) return;
   const tk = o.team;
   const linkedUnitIds = new Set(DB.ownerUnits.filter(r=>r.status==='active').map(r=>r.unitId));
-  const availableUnits = DB.units.filter(x=>x.team===tk && !linkedUnitIds.has(x.id));
+  const availableUnits = DB.units.filter(x=>x.team===tk && !x.deletedAt && !linkedUnitIds.has(x.id));
   openModal(`
     <div class="modal-head"><div style="font-weight:800;">Add unit — ${esc(o.name)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
     <div class="modal-body">

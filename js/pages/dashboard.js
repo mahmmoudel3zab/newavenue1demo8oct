@@ -4,7 +4,6 @@
 function renderDashboard(u){
   const teamKey = myTeamKey(u);
   const units = visibleUnits(u).slice().sort((a,b)=>popularityScore(b)-popularityScore(a)).slice(0,3);
-  const myUnits = DB.units.filter(x=>x.ownerSalespersonId===u.id).slice(0,3);
   const reqList = requestsFor(teamKey);
   const unread = unreadCountFor(u);
   const recentReq = reqList.slice(-3).reverse();
@@ -51,12 +50,7 @@ function renderDashboard(u){
     <button class="btn btn-ghost btn-sm" data-nav="inventory" style="margin-top:10px; width:100%; justify-content:center;">Open News Feed ${ic('chevron')}</button>
   </div>`;
 
-  const myUnitsCard = `<div class="card card-pad">
-    <div class="section-title">My Units</div>
-    <div class="section-sub">${DB.units.filter(x=>x.ownerSalespersonId===u.id).length} units assigned to you</div>
-    ${myUnits.length? myUnits.map(un=>unitMiniRow(un)).join('') : emptyRow('No units of your own yet')}
-    <button class="btn btn-ghost btn-sm" data-nav="myunits" style="margin-top:10px; width:100%; justify-content:center;">Open My Units ${ic('chevron')}</button>
-  </div>`;
+  const referencesCard = renderDashboardReferencesCard(u, teamKey);
 
   const reqCard = `<div class="card card-pad">
     <div style="display:flex; align-items:center; gap:8px;"><div class="section-title">Requests</div>${unread>0?`<span class="badge badge-fresh">${unread} new</span>`:''}</div>
@@ -80,7 +74,7 @@ function renderDashboard(u){
       <div class="section-sub">Visibility into everyone below you in the hierarchy — separate from your own personal activity above</div>
       <table><thead><tr><th>Team member</th><th>Role</th><th>Today's report</th><th>Units</th><th>Owners</th></tr></thead><tbody>
       ${downUsers.length ? downUsers.map(su=>{
-        const sun = DB.units.filter(x=>x.ownerSalespersonId===su.id).length;
+        const sun = DB.units.filter(x=>x.ownerSalespersonId===su.id && !x.deletedAt).length;
         const so = distinctOwnerCountForSalesperson(su.id);
         const ds = effectiveTodayStr();
         const st = isOnOrAfterLaunch(ds) ? personalReportStatus(su, ds) : 'n/a';
@@ -93,7 +87,7 @@ function renderDashboard(u){
 
   let adminBlock = '';
   if(isAdmin(u)){
-    const pendingUnits = DB.units.filter(x=>x.pending).length;
+    const pendingUnits = DB.units.filter(x=>x.pending && !x.deletedAt).length;
     const pendingTransfers = DB.transfers.filter(t=>t.status==='pending').length;
     adminBlock = `<div class="card card-pad" style="margin-top:18px;">
       <div class="section-title">Admin queue</div>
@@ -106,7 +100,47 @@ function renderDashboard(u){
     </div>`;
   }
 
-  return `${banner}<div class="grid-3">${newsCard}${myUnitsCard}${reqCard}</div>${mgmtBlock}${adminBlock}`;
+  return `${banner}<div class="grid-3">${newsCard}${referencesCard}${reqCard}</div>${mgmtBlock}${adminBlock}`;
+}
+
+/* =========================================================
+   PART 5 — Dashboard References card
+   Replaces the old "My Units" summary card on the Dashboard ONLY. My Units itself is untouched
+   and still fully reachable from the normal navigation (sidebar / mobile More drawer) — see
+   navItems() in session.js, unchanged. "References" here means the salesperson CONTACT
+   DIRECTORY (same data/permission rules as the full Reference page in pages/reference.js — see
+   that file's header comment), not a unit/compound reference list. Uses real DB.refs/DB.users
+   data only; nothing here is hardcoded or fabricated. A small, dashboard-scoped search field
+   lets the person jump straight to a colleague without leaving the Dashboard; "Open full
+   directory" goes to the complete Reference page for everyone else.
+   ========================================================= */
+function renderDashboardReferencesCard(u, teamKey){
+  const q = (session._dashRefSearch||'').trim().toLowerCase();
+  let list = DB.refs.filter(r=>r.team===teamKey).map(r=>({r, person: refUser(r)})).filter(x=>x.person);
+  if(q) list = list.filter(({r,person})=> person.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q));
+  list = list.slice().sort((a,b)=>a.person.name.localeCompare(b.person.name));
+  const shown = list.slice(0,4);
+  return `<div class="card card-pad">
+    <div class="section-title">References</div>
+    <div class="section-sub">${teamKey[0].toUpperCase()+teamKey.slice(1)} team directory — search a colleague to call or message</div>
+    <div class="search-field" style="margin-bottom:10px;">
+      ${ic('search')}<input id="dashRefSearch" placeholder="Search by name or reference code…" value="${esc(session._dashRefSearch||'')}">
+    </div>
+    ${shown.length? shown.map(({r,person})=>dashboardRefRow(r,person)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
+    ${list.length>shown.length ? `<div style="font-size:11px; color:var(--text-faint); margin-top:4px;">+${list.length-shown.length} more in the full directory</div>` : ''}
+    <button class="btn btn-ghost btn-sm" data-nav="reference" style="margin-top:10px; width:100%; justify-content:center;">Open full directory ${ic('chevron')}</button>
+  </div>`;
+}
+function dashboardRefRow(r,person){
+  return `<div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid var(--border);">
+    <span class="avatar" style="background:${avatarColor(person.name)}; width:30px;height:30px; font-size:11px; flex-shrink:0;">${initials(person.name)}</span>
+    <div style="flex:1; min-width:0;">
+      <div style="font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(person.name)}</div>
+      <div style="font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(ROLE_LABELS[person.role]||person.role)}</div>
+    </div>
+    <a class="icon-btn" style="text-decoration:none;" href="${telHref(r.phone)}" title="Call ${esc(person.name)}">${ic('phone')}</a>
+    <a class="icon-btn" style="text-decoration:none;" href="${waHref(r.whatsapp)}" target="_blank" rel="noopener" title="WhatsApp ${esc(person.name)}">${ic('whatsapp')}</a>
+  </div>`;
 }
 function unitMiniRow(un){
   return `<div class="unit-mini" data-unit="${un.id}" style="display:flex; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--border); cursor:pointer;">
@@ -122,5 +156,12 @@ function emptyRow(text){ return `<div style="padding:14px 0; font-size:12.5px; c
 AFTER_RENDER.dashboard = function(u){
   document.querySelectorAll('.unit-mini').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
   document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=> go(b.dataset.nav)));
+  const rs = document.getElementById('dashRefSearch');
+  if(rs){
+    rs.addEventListener('input', ()=>{ session._dashRefSearch = rs.value; renderPageInto(u); });
+    if(session._dashRefSearchFocused){ rs.focus(); rs.setSelectionRange(rs.value.length, rs.value.length); }
+    rs.addEventListener('focus', ()=>{ session._dashRefSearchFocused = true; });
+    rs.addEventListener('blur', ()=>{ session._dashRefSearchFocused = false; });
+  }
 };
 

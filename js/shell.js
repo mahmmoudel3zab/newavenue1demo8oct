@@ -130,7 +130,7 @@ function renderShell(u){
   </div>
   <div id="main">
     <div class="topbar">
-      <div class="topbar-title">${navItems(u).find(i=>i.key===session.page)?.label || ''}</div>
+      <div class="topbar-title">${(navItems(u).find(i=>i.key===session.page)||{}).label || (typeof PAGE_LABELS!=='undefined'?PAGE_LABELS[session.page]:'') || ''}</div>
       <div class="topbar-spacer"></div>
       <button class="icon-btn" id="topNotifBtn">${ic('notif')}${unreadNotifCount(u)>0?`<span class="dot-badge">${unreadNotifCount(u)>9?'9+':unreadNotifCount(u)}</span>`:''}</button>
       <div class="user-chip">
@@ -190,6 +190,16 @@ function attachShellEvents(u){
   const dlo = document.getElementById('drawerLogoutBtn'); if(dlo) dlo.addEventListener('click', ()=>{ session._moreOpen=false; logout(); });
 }
 
+// Part 6 — navigation fix: a page reachable only indirectly (e.g. Company Announcements,
+// opened from a notification rather than a nav item for most employees — see
+// pages/announcements.js) has no entry in navItems(u) for that viewer, which previously left
+// the topbar title blank. PAGE_LABELS is the fallback for exactly that case, so the topbar
+// always shows where you are, however you got there.
+const PAGE_LABELS = {
+  dashboard:'Dashboard', leads:'Leads', inventory:'News Feed', myunits:'My Units',
+  requests:'Requests', owners:'Owners', reference:'Reference', notifications:'Notifications',
+  admin:'Admin', profile:'Profile', reports:'Daily Reports', announcements:'Company Announcements'
+};
 function renderPageInto(u){
   const root = document.getElementById('pageRoot');
   const renderers = {
@@ -200,6 +210,8 @@ function renderPageInto(u){
   };
   const fn = renderers[session.page] || renderDashboard;
   root.innerHTML = fn(u);
+  const titleEl = document.querySelector('.topbar-title');
+  if(titleEl) titleEl.textContent = (navItems(u).find(i=>i.key===session.page)||{}).label || PAGE_LABELS[session.page] || '';
   const after = AFTER_RENDER[session.page];
   if(after) after(u);
 }

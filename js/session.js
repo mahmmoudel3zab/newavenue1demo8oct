@@ -32,7 +32,7 @@ function myTeamKey(u, overrideTeam){
 }
 function requestsFor(teamKey){ return DB.requests[teamKey] || []; }
 
-function visibleUnits(u){ const tk = myTeamKey(u); return DB.units.filter(x=>x.team===tk); }
+function visibleUnits(u){ const tk = myTeamKey(u); return DB.units.filter(x=>x.team===tk && !x.deletedAt); }
 
 /* =========================================================
    PERSONAL ("My") vs TEAM data
@@ -57,7 +57,7 @@ function visibleLeads(u){
 // respecting the same hierarchy rules as before (own / downline / everyone for admins).
 function visibleOwnerUnits(u){
   const tk = myTeamKey(u);
-  let pool = DB.ownerUnits.filter(r=>{ const o = DB.owners.find(x=>x.id===r.ownerId); return o && o.team===tk; });
+  let pool = DB.ownerUnits.filter(r=>{ const o = DB.owners.find(x=>x.id===r.ownerId); return o && !o.deletedAt && o.team===tk; });
   if(u.role==='salesperson') return pool.filter(r=>r.salespersonId===u.id);
   if(isMgmt(u)){ const down = getDownlineIds(DB.users, u.id); return pool.filter(r=>down.includes(r.salespersonId)); }
   return pool; // admins / top execs see all in active team view
@@ -65,7 +65,7 @@ function visibleOwnerUnits(u){
 // Returns distinct Owner records visible to this user (derived from visible relationships).
 function visibleOwners(u){
   const relIds = new Set(visibleOwnerUnits(u).filter(r=>r.status==='active').map(r=>r.ownerId));
-  return DB.owners.filter(o=>relIds.has(o.id));
+  return DB.owners.filter(o=>relIds.has(o.id) && !o.deletedAt);
 }
 // My Owners: the owners THIS user personally created/holds (home, shared-by-approval, or has
 // an active unit relationship for) — unlimited units per owner, zero units allowed.
@@ -77,14 +77,15 @@ function teamOwners(u){
   const mine = new Set(myOwners(u).map(o=>o.id));
   const ids = new Set();
   DB.owners.forEach(o=>{
+    if(o.deletedAt) return;
     if(mine.has(o.id)) return;
     if(down.has(o.salespersonId) || (o.sharedWith||[]).some(id=>down.has(id))) ids.add(o.id);
   });
   DB.ownerUnits.filter(r=>r.status==='active' && down.has(r.salespersonId)).forEach(r=>{ if(!mine.has(r.ownerId)) ids.add(r.ownerId); });
-  return DB.owners.filter(o=>ids.has(o.id));
+  return DB.owners.filter(o=>ids.has(o.id) && !o.deletedAt);
 }
-function myUnits(u){ return DB.units.filter(x=>x.ownerSalespersonId===u.id); }
-function teamUnits(u){ const down = new Set(downlineIds(u)); return DB.units.filter(x=>down.has(x.ownerSalespersonId)); }
+function myUnits(u){ return DB.units.filter(x=>x.ownerSalespersonId===u.id && !x.deletedAt); }
+function teamUnits(u){ const down = new Set(downlineIds(u)); return DB.units.filter(x=>down.has(x.ownerSalespersonId) && !x.deletedAt); }
 // ownerExpiryState takes a raw timestamp (an Owner<->Unit relationship's lastUpdateAt) —
 // this is the relationship-level 30-day cycle, using the same 25/30-day soon/expired rule
 // that previously applied to the whole owner.

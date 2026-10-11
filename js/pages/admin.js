@@ -3,16 +3,28 @@
    ========================================================= */
 function renderAdminPage(u){
   if(!isAdmin(u)) return `<div class="empty-state">${ic('admin')}<div>Access denied — administrative permissions required.</div></div>`;
-  const tab = session._adminTab || 'users';
+  const isHeadAdmin = u.role==='headadmin';
+  let tab = session._adminTab || 'users';
+  const HEAD_ADMIN_ONLY_TABS = ['ownertransfer','pool','deletedowners','deletedunits'];
+  // Server-equivalent enforcement doesn't exist on this frontend-only prototype (as already
+  // documented throughout this app for every other role check), but we still never RENDER a
+  // Head-Admin-only tab's content for a non-Head-Admin — if session state somehow points at one
+  // (e.g. a stale tab from switching accounts), fall back to Users rather than show it.
+  if(HEAD_ADMIN_ONLY_TABS.includes(tab) && !isHeadAdmin) tab = 'users';
   const tabs = [['users','Users'],['units','Pending Units'],['transfers','Owner Transfers'],['audit','Audit Log']];
+  if(isHeadAdmin) tabs.push(['ownertransfer','Transfer Owner'],['pool','Available Pool'],['deletedowners','Deleted Owners'],['deletedunits','Deleted Units']);
   let body = '';
   if(tab==='users') body = renderAdminUsers(u);
   else if(tab==='units') body = renderAdminUnits(u);
   else if(tab==='transfers') body = renderAdminTransfers(u);
-  else body = renderAdminAudit(u);
+  else if(tab==='audit') body = renderAdminAudit(u);
+  else if(tab==='ownertransfer') body = renderAdminOwnerTransfer(u);
+  else if(tab==='pool') body = renderAdminAvailablePool(u);
+  else if(tab==='deletedowners') body = renderAdminDeletedOwners(u);
+  else if(tab==='deletedunits') body = renderAdminDeletedUnits(u);
   return `
   <div style="margin-bottom:10px;"><span class="badge badge-brand">${ROLE_LABELS[u.role]}</span></div>
-  <div class="tabs">${tabs.map(([k,l])=>`<button class="tab-btn ${tab===k?'active':''}" data-admintab="${k}">${l}</button>`).join('')}</div>
+  <div class="tabs" style="overflow-x:auto; flex-wrap:nowrap;">${tabs.map(([k,l])=>`<button class="tab-btn ${tab===k?'active':''}" data-admintab="${k}" style="white-space:nowrap;">${l}</button>`).join('')}</div>
   ${body}`;
 }
 /* =========================================================
@@ -237,7 +249,7 @@ function openAddSalesUserModal(u){
   });
 }
 function renderAdminUnits(u){
-  const pending = DB.units.filter(x=>x.pending);
+  const pending = DB.units.filter(x=>x.pending && !x.deletedAt);
   return `<div class="card">${pending.length? pending.map(un=>{
     const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
     return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border);">
@@ -267,6 +279,160 @@ function renderAdminAudit(u){
     return `<div style="padding:10px 16px; border-bottom:1px solid var(--border); font-size:12.5px;"><b>${esc(actor?actor.name:l.actor)}</b> — ${l.action.replace(/_/g,' ')} <span style="color:var(--text-faint);">· ${fmtDateTime(l.at)}</span></div>`;
   }).join('') : emptyRow('No audit history yet.')}</div>`;
 }
+/* =========================================================
+   PART 1 (admin side) — Deleted Owners / Deleted Units management — Head Admin only.
+   Reachable only via the Admin page's own Head-Admin-only tabs (renderAdminPage already blocks
+   a non-Head-Admin from ever rendering this body). Restoring always updates the SAME row — see
+   restoreOwner()/restoreUnit() in data.js — so it can never create a duplicate record.
+   ========================================================= */
+function renderAdminDeletedOwners(u){
+  const list = deletedOwnersList();
+  return `<div class="section-sub">${list.length} deleted owner${list.length===1?'':'s'} — hidden from normal Owners views, not erased. Restoring brings back the exact same record with its full history and relationships intact.</div>
+  <div class="card">${list.length? list.map(o=>{
+    const by = DB.users.find(x=>x.id===o.deletedBy);
+    const rels = activeOwnerUnitsFor(o.id);
+    return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+      <span class="avatar" style="background:${avatarColor(o.name)}; width:34px;height:34px;">${initials(o.name)}</span>
+      <div style="flex:1; min-width:200px;">
+        <div style="font-weight:700; font-size:13px;">${esc(o.name)} <span class="team-pill ${o.team}" style="margin-left:4px;">${o.team}</span></div>
+        <div style="font-size:11.5px; color:var(--text-faint);">${ownerPhoneDisplay(o)} · ${rels.length} linked unit${rels.length===1?'':'s'} (preserved) · deleted by ${esc(by?by.name:'—')} on ${fmtDateTime(o.deletedAt)}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" data-restoreowner="${o.id}">${ic('refresh')} Restore</button>
+    </div>`;
+  }).join('') : emptyRow('No deleted owners.')}</div>`;
+}
+function renderAdminDeletedUnits(u){
+  const list = deletedUnitsList();
+  return `<div class="section-sub">${list.length} deleted unit${list.length===1?'':'s'} — hidden from normal inventory/My Units views, not erased. Restoring brings back the exact same record, including its owner relationships.</div>
+  <div class="card">${list.length? list.map(un=>{
+    const by = DB.users.find(x=>x.id===un.deletedBy);
+    const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
+    return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;">
+        <div style="font-weight:700; font-size:13px;">${esc(un.compound)} · ${esc(un.unitType)} <span class="team-pill ${un.team}" style="margin-left:4px;">${un.team}</span></div>
+        <div style="font-size:11.5px; color:var(--text-faint);">${fmtMoney(un.totalPrice)} · belongs to ${esc(sp?sp.name:'—')} · deleted by ${esc(by?by.name:'—')} on ${fmtDateTime(un.deletedAt)}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" data-restoreunit="${un.id}">${ic('refresh')} Restore</button>
+    </div>`;
+  }).join('') : emptyRow('No deleted units.')}</div>`;
+}
+
+/* =========================================================
+   PART 4 (admin side) — Available Pool — Head Admin only.
+   Company-wide (both teams) view of owner-unit relationships that expired (no update in 30+
+   days). Reassigning one here is a direct admin action — effective immediately, unlike the old
+   self-service "claim" flow it replaces — and only ever changes that ONE relationship.
+   ========================================================= */
+function renderAdminAvailablePool(u){
+  const list = expiredOwnerUnitsCompanyWide();
+  return `<div class="section-sub">${list.length} relationship${list.length===1?'':'s'} expired (not updated in 30+ days) across both teams. Reassigning a relationship only affects that one unit — the owner's other units are untouched.</div>
+  <div class="card">${list.length? list.map(r=>{
+    const o = DB.owners.find(x=>x.id===r.ownerId);
+    const unit = DB.units.find(x=>x.id===r.unitId);
+    const sp = DB.users.find(x=>x.id===r.salespersonId);
+    const eligible = DB.users.filter(x=>isSalesActive(x) && x.team===(o?o.team:null) && x.id!==r.salespersonId).sort((a,b)=>a.name.localeCompare(b.name));
+    return `<div style="padding:13px 16px; border-bottom:1px solid var(--border);">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span class="avatar" style="background:${avatarColor(o?o.name:'?')}; width:34px;height:34px;">${initials(o?o.name:'?')}</span>
+        <div style="flex:1; min-width:200px;">
+          <div style="font-weight:700; font-size:13px;">${esc(o?o.name:'—')} · ${esc(unitLabel(unit))}</div>
+          <div style="font-size:11.5px; color:var(--text-faint);">Currently with ${esc(sp?sp.name:'—')} · not updated for ${daysBetween(r.lastUpdateAt)} days · ${o?esc(o.team):''}</div>
+        </div>
+        <select class="pool-dest" data-pooldest="${r.id}" style="width:auto; min-width:180px;">
+          <option value="">Reassign to…</option>
+          ${eligible.map(sp2=>`<option value="${sp2.id}">${esc(sp2.name)} — ${esc(ROLE_LABELS[sp2.role])}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm btn-primary" data-poolreassign="${r.id}">Reassign</button>
+      </div>
+    </div>`;
+  }).join('') : emptyRow('No relationships currently expired.')}</div>`;
+}
+
+/* =========================================================
+   PART 3 (admin side) — Transfer Owner — Head Admin only.
+   Search any owner company-wide by name or phone, confirm the right one, pick the destination
+   salesperson from a searchable, filtered list (same team as the owner, sales-active only,
+   excluding whoever currently holds it), and confirm before the transfer happens.
+   ========================================================= */
+function renderAdminOwnerTransfer(u){
+  const q = (session._ownerTransferSearch||'').trim().toLowerCase();
+  let results = [];
+  if(q){
+    results = DB.owners.filter(o=> !o.deletedAt && (o.name.toLowerCase().includes(q) || phoneLocalDisplay(o.phone).includes(q) || (o.phone2 && phoneLocalDisplay(o.phone2).includes(q)))).slice(0,25);
+  }
+  return `
+  <div class="section-sub">Search for an owner (company-wide), then choose a destination salesperson to transfer them to. This moves every unit/relationship currently held by the owner's current salesperson — nothing is duplicated or lost.</div>
+  <div class="search-field" style="max-width:420px; margin-bottom:14px;">
+    ${ic('search')}<input id="ownerTransferSearch" placeholder="Search owner by name or phone…" value="${esc(session._ownerTransferSearch||'')}">
+  </div>
+  <div class="card">
+    ${!q ? emptyRow('Type a name or phone number to find an owner.') : (results.length? results.map(o=>{
+      const rels = activeOwnerUnitsFor(o.id);
+      const holderIds = ownerCurrentHolderIds(o);
+      const holders = holderIds.map(id=>DB.users.find(x=>x.id===id)).filter(Boolean);
+      return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+        <span class="avatar" style="background:${avatarColor(o.name)}; width:34px;height:34px;">${initials(o.name)}</span>
+        <div style="flex:1; min-width:200px;">
+          <div style="font-weight:700; font-size:13px;">${esc(o.name)} <span class="team-pill ${o.team}" style="margin-left:4px;">${o.team}</span></div>
+          <div style="font-size:11.5px; color:var(--text-faint);">${ownerPhoneDisplay(o)} · ${rels.length} unit${rels.length===1?'':'s'} · held by ${holders.map(h=>esc(h.name)).join(', ')||'—'}</div>
+        </div>
+        <button class="btn btn-sm btn-primary" data-starttransfer="${o.id}">${ic('team')} Transfer…</button>
+      </div>`;
+    }).join('') : emptyRow('No owners match that search.'))}
+  </div>`;
+}
+function openOwnerTransferModal(ownerId, u){
+  const o = DB.owners.find(x=>x.id===ownerId);
+  if(!o || o.deletedAt) return;
+  const holderIds = ownerCurrentHolderIds(o);
+  if(holderIds.length===0){ toast('This owner currently has no holder to transfer from.'); return; }
+  const holders = holderIds.map(id=>DB.users.find(x=>x.id===id)).filter(Boolean);
+  openModal(`
+    <div class="modal-head"><div style="font-weight:800;">Transfer owner — ${esc(o.name)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
+    <div class="modal-body">
+      <div class="card card-pad" style="background:var(--surface-2); margin-bottom:14px; font-size:12.5px;">
+        <div><b>${esc(o.name)}</b> · ${ownerPhoneDisplay(o)}${o.phone2?' / '+phoneLocalDisplay(o.phone2):''}</div>
+        <div style="color:var(--text-faint); margin-top:2px;">${activeOwnerUnitsFor(o.id).length} linked unit(s) · ${o.team}</div>
+      </div>
+      ${holders.length>1 ? `<div class="field"><label class="field-label">Transfer FROM (this owner has more than one current holder — choose which one)</label>
+        <select id="ot_from">${holders.map(h=>`<option value="${h.id}">${esc(h.name)} — ${esc(ROLE_LABELS[h.role])}</option>`).join('')}</select>
+      </div>` : `<input type="hidden" id="ot_from" value="${holders[0].id}">
+        <div class="section-sub" style="margin-bottom:10px;">Currently with <b>${esc(holders[0].name)}</b></div>`}
+      <div class="field"><label class="field-label">Transfer TO</label>
+        <div class="search-field" style="margin-bottom:8px;">${ic('search')}<input id="ot_destSearch" placeholder="Search destination salesperson…"></div>
+        <select id="ot_to" size="6" style="height:auto;"></select>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" id="confirmTransferBtn">Transfer owner</button></div>`, {noBackdropClose:true});
+  document.getElementById('modalCloseX').addEventListener('click', closeModal);
+  function destCandidates(){
+    const fromId = document.getElementById('ot_from').value;
+    const q = (document.getElementById('ot_destSearch').value||'').trim().toLowerCase();
+    return DB.users.filter(x=> isSalesActive(x) && x.team===o.team && x.id!==fromId && (!q || x.name.toLowerCase().includes(q)))
+      .sort((a,b)=>a.name.localeCompare(b.name));
+  }
+  function renderDestOptions(){
+    const sel = document.getElementById('ot_to');
+    const cands = destCandidates();
+    sel.innerHTML = cands.length ? cands.map(c=>`<option value="${c.id}">${esc(c.name)} — ${esc(ROLE_LABELS[c.role])}</option>`).join('') : `<option value="" disabled>No matching salesperson</option>`;
+  }
+  renderDestOptions();
+  document.getElementById('ot_destSearch').addEventListener('input', renderDestOptions);
+  const fromSel = document.getElementById('ot_from');
+  if(fromSel.tagName==='SELECT') fromSel.addEventListener('change', renderDestOptions);
+  document.getElementById('confirmTransferBtn').addEventListener('click', ()=>{
+    const fromId = document.getElementById('ot_from').value;
+    const toSel = document.getElementById('ot_to');
+    const toId = toSel.value;
+    if(!toId){ toast('Choose a destination salesperson'); return; }
+    const fromUser = DB.users.find(x=>x.id===fromId), toUser = DB.users.find(x=>x.id===toId);
+    const ok = confirm(`Transfer ${o.name} from ${fromUser?fromUser.name:'—'} to ${toUser?toUser.name:'—'}?\n\nAll units and history currently held by ${fromUser?fromUser.name:'this salesperson'} for this owner will move to ${toUser?toUser.name:'the new salesperson'}. Nothing is duplicated or deleted.`);
+    if(!ok) return;
+    const moved = transferOwnerFromTo(o, fromId, toId, u.id);
+    closeModal(); toast(`${o.name} transferred to ${toUser?toUser.name:'—'} (${moved} unit relationship${moved===1?'':'s'} moved)`); renderPageInto(u);
+  });
+}
+
 AFTER_RENDER.admin = function(u){
   document.querySelectorAll('[data-admintab]').forEach(b=> b.addEventListener('click', ()=>{ session._adminTab=b.dataset.admintab; renderPageInto(u); }));
   const us = document.getElementById('adminUserSearch');
@@ -318,5 +484,48 @@ AFTER_RENDER.admin = function(u){
     notify(t.toSalespersonId,'system','Your owner request was rejected','owners');
     persist(); toast('Request rejected'); renderPageInto(u);
   }));
+
+  // ---- Head-Admin-only tabs (renderAdminPage already blocks these from rendering for anyone else) ----
+  document.querySelectorAll('[data-restoreowner]').forEach(b=> b.addEventListener('click', ()=>{
+    const o = DB.owners.find(x=>x.id===b.dataset.restoreowner);
+    if(!o) return;
+    if(!confirm(`Restore ${o.name}? They will reappear in their salesperson's normal Owners list with all history and linked units intact.`)) return;
+    restoreOwner(o);
+    log(u.id,'owner_restored',{ownerId:o.id});
+    persist(); toast('Owner restored'); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-restoreunit]').forEach(b=> b.addEventListener('click', ()=>{
+    const un = DB.units.find(x=>x.id===b.dataset.restoreunit);
+    if(!un) return;
+    if(!confirm(`Restore ${un.compound} — ${un.unitType}? It will reappear in normal inventory/My Units.`)) return;
+    restoreUnit(un);
+    log(u.id,'unit_restored',{unitId:un.id});
+    persist(); toast('Unit restored'); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-poolreassign]').forEach(b=> b.addEventListener('click', ()=>{
+    const relId = b.dataset.poolreassign;
+    const rel = DB.ownerUnits.find(x=>x.id===relId);
+    const destSel = document.querySelector(`[data-pooldest="${relId}"]`);
+    const toId = destSel ? destSel.value : '';
+    if(!rel || !toId){ toast('Choose a salesperson to reassign to first'); return; }
+    const o = DB.owners.find(x=>x.id===rel.ownerId);
+    const unit = DB.units.find(x=>x.id===rel.unitId);
+    const fromUser = DB.users.find(x=>x.id===rel.salespersonId);
+    const toUser = DB.users.find(x=>x.id===toId);
+    if(!confirm(`Reassign ${o?o.name:'this owner'} — ${unitLabel(unit)} from ${fromUser?fromUser.name:'—'} to ${toUser?toUser.name:'—'}?\n\nOnly this one relationship changes — the owner's other units are untouched.`)) return;
+    const fromId = rel.salespersonId;
+    rel.salespersonId = toId;
+    log(u.id,'owner_unit_relationship_reassigned',{ownerUnitId:rel.id, from:fromId, to:toId});
+    notify(toId,'system','An owner relationship was reassigned to you: '+(o?o.name:''),'owners','poolreassign_'+rel.id+'_'+now());
+    persist(); toast('Relationship reassigned'); renderPageInto(u);
+  }));
+  document.querySelectorAll('[data-starttransfer]').forEach(b=> b.addEventListener('click', ()=> openOwnerTransferModal(b.dataset.starttransfer, u)));
+  const ots = document.getElementById('ownerTransferSearch');
+  if(ots){
+    ots.addEventListener('input', ()=>{ session._ownerTransferSearch = ots.value; renderPageInto(u); });
+    if(session._ownerTransferSearchFocused){ ots.focus(); ots.setSelectionRange(ots.value.length, ots.value.length); }
+    ots.addEventListener('focus', ()=>{ session._ownerTransferSearchFocused = true; });
+    ots.addEventListener('blur', ()=>{ session._ownerTransferSearchFocused = false; });
+  }
 };
 

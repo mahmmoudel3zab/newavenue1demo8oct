@@ -166,6 +166,8 @@ function buildUnits(users){
       photos: rndInt(3,6),
       ownerSalespersonId: sp.id,
       createdAt: now() - rndInt(0,60)*86400000,
+      updatedAt: now() - rndInt(0,60)*86400000,
+      deletedAt: null, deletedBy: null,
       views:[], calls:[], whatsapps:[], pdfs:[]
     };
   }
@@ -307,7 +309,8 @@ function buildOwnersAndRelationships(users, units){
         id: uid('o'), team: sp.team, salespersonId: sp.id, sharedWith: [],
         name: pick(FIRST_NAMES)+' '+pick(LAST_NAMES),
         phone, phone2: rnd()<0.3 ? freshPhone() : null,
-        createdAt: daysAgo(rndInt(10,60))
+        createdAt: daysAgo(rndInt(10,60)),
+        deletedAt: null, deletedBy: null
       };
       owners.push(owner);
       // Most owners have at least one unit; some are deliberately left with zero units so the
@@ -339,30 +342,128 @@ function ownerUnitsForSalesperson(spId){ return DB.ownerUnits.filter(r=>r.salesp
 function ownersForSalesperson(spId){
   const ids = new Set(ownerUnitsForSalesperson(spId).map(r=>r.ownerId));
   DB.owners.forEach(o=>{ if(o.salespersonId===spId || (o.sharedWith||[]).includes(spId)) ids.add(o.id); });
-  return DB.owners.filter(o=>ids.has(o.id));
+  return DB.owners.filter(o=>ids.has(o.id) && !o.deletedAt);
 }
 // Count of DISTINCT owners this salesperson currently "has" (the 30-owner cap — unlimited
 // units per owner never count against it, and an owner with zero units still counts once).
 function distinctOwnerCountForSalesperson(spId){
   return ownersForSalesperson(spId).length;
 }
+// Only matches ACTIVE (non-deleted) owners — a soft-deleted owner's phone is reserved (see
+// findArchivedOwnerByCanonicalPhone below) but must never silently resolve as "this owner
+// already exists" for normal add/edit flows while it's archived.
 function findOwnerByCanonicalPhone(canonical, team){
   if(!canonical) return null;
-  return DB.owners.find(o=> o.team===team && (o.phone===canonical || o.phone2===canonical)) || null;
+  return DB.owners.find(o=> o.team===team && !o.deletedAt && (o.phone===canonical || o.phone2===canonical)) || null;
+}
+// Finds a SOFT-DELETED owner matching this phone, so Add Owner can give a clear, specific
+// error ("ask a Head Admin to restore it") instead of silently creating a second record with
+// the same phone number once the active-owner check above has been passed.
+function findArchivedOwnerByCanonicalPhone(canonical, team){
+  if(!canonical) return null;
+  return DB.owners.find(o=> o.team===team && o.deletedAt && (o.phone===canonical || o.phone2===canonical)) || null;
 }
 // Does this salesperson already "have" this owner (home, shared, or an active unit relationship)?
 function salespersonHasOwner(spId, ownerId){
   const o = DB.owners.find(x=>x.id===ownerId);
-  if(o && (o.salespersonId===spId || (o.sharedWith||[]).includes(spId))) return true;
+  if(!o || o.deletedAt) return false;
+  if(o.salespersonId===spId || (o.sharedWith||[]).includes(spId)) return true;
   return DB.ownerUnits.some(r=>r.salespersonId===spId && r.ownerId===ownerId && r.status==='active');
 }
 // Is this owner currently "held" (home, shared, or an active relationship) by some OTHER salesperson?
 function ownerHeldByOthers(ownerId, excludingSpId){
   const o = DB.owners.find(x=>x.id===ownerId);
-  if(!o) return false;
+  if(!o || o.deletedAt) return false;
   if(o.salespersonId && o.salespersonId!==excludingSpId) return true;
   if((o.sharedWith||[]).some(id=>id!==excludingSpId)) return true;
   return DB.ownerUnits.some(r=>r.ownerId===ownerId && r.status==='active' && r.salespersonId!==excludingSpId);
+}
+
+/* =========================================================
+   PART 1 — Soft delete for Owners and Units
+   A soft-deleted record is never erased: only `deletedAt`/`deletedBy` are set. The row, its
+   phone/history, and every relationship that references it (DB.ownerUnits for an owner,
+   nothing references a unit by id except DB.ownerUnits.unitId and DB.leads.interestedUnitId)
+   are left completely untouched — deleting an owner does NOT delete or detach its units, and
+   deleting a unit does NOT delete the owner relationships that reference it (they simply show
+   "(unit removed)" via unitLabel(), exactly as an already-handled case in this codebase).
+   Restoring always UPDATES the same row (never re-creates it), so duplication on restore is
+   structurally impossible — reinforced by findOwnerByCanonicalPhone() excluding deleted owners
+   and findArchivedOwnerByCanonicalPhone() catching the "already archived" case explicitly.
+   Every normal data-access helper above/below (ownersForSalesperson, visibleOwners, myOwners,
+   teamOwners, visibleUnits, myUnits, teamUnits, the News Feed source list, etc.) excludes
+   deleted rows — restricted, Head-Admin-only views (see admin.js) are the only place a deleted
+   row is ever read back.
+   ========================================================= */
+function isOwnerDeleted(o){ return !!(o && o.deletedAt); }
+function isUnitDeleted(un){ return !!(un && un.deletedAt); }
+function softDeleteOwner(owner, actorId){
+  owner.deletedAt = now(); owner.deletedBy = actorId;
+}
+function restoreOwner(owner){
+  owner.deletedAt = null; owner.deletedBy = null;
+}
+function softDeleteUnit(unit, actorId){
+  unit.deletedAt = now(); unit.deletedBy = actorId; unit.updatedAt = now();
+}
+function restoreUnit(unit){
+  unit.deletedAt = null; unit.deletedBy = null; unit.updatedAt = now();
+}
+function deletedOwnersList(){ return DB.owners.filter(o=>o.deletedAt).slice().sort((a,b)=>b.deletedAt-a.deletedAt); }
+function deletedUnitsList(){ return DB.units.filter(x=>x.deletedAt).slice().sort((a,b)=>b.deletedAt-a.deletedAt); }
+
+/* =========================================================
+   PART 3 — Owner transfer between salespeople (Head Admin only — see admin.js for the
+   permission gate on the UI itself).
+   An Owner has NO single "owning salesperson" column in this data model: a salesperson can
+   "have" an owner via being its home salespersonId, via an admin-approved sharedWith entry, or
+   via holding one or more active DB.ownerUnits relationships for it — and different
+   relationships on the SAME owner can be held by DIFFERENT salespeople at once. So "transfer
+   this owner" is ambiguous unless we say whose claim is moving — ownerCurrentHolderIds() below
+   lists everyone who currently has a claim; the caller (the admin UI) must resolve exactly one
+   `fromSpId` before calling transferOwnerFromTo() — asking the admin to pick when there's more
+   than one, rather than silently guessing and possibly moving the wrong person's relationships
+   or breaking another salesperson's still-active work on the same owner.
+   ========================================================= */
+function ownerCurrentHolderIds(owner){
+  const ids = new Set();
+  if(owner.salespersonId) ids.add(owner.salespersonId);
+  (owner.sharedWith||[]).forEach(id=>ids.add(id));
+  activeOwnerUnitsFor(owner.id).forEach(r=>ids.add(r.salespersonId));
+  return [...ids];
+}
+// Reassigns everything `fromSpId` currently holds on this owner (home ownership if theirs,
+// shared access if theirs, and every active unit relationship they hold) to `toSpId`, in one
+// atomic step. Never creates a second owner record, never touches relationships held by anyone
+// else, and never deletes/recreates anything — only the holder fields change, so phone/notes/
+// history/relationship records are fully preserved exactly as Part 3 requires.
+function transferOwnerFromTo(owner, fromSpId, toSpId, actorId){
+  let movedRelCount = 0;
+  if(owner.salespersonId===fromSpId) owner.salespersonId = toSpId;
+  owner.sharedWith = (owner.sharedWith||[]).filter(id=>id!==fromSpId);
+  activeOwnerUnitsFor(owner.id).forEach(r=>{
+    if(r.salespersonId===fromSpId){ r.salespersonId = toSpId; movedRelCount++; }
+  });
+  log(actorId,'owner_full_transfer',{ownerId:owner.id, from:fromSpId, to:toSpId, relationshipsMoved:movedRelCount});
+  notify(toSpId,'system','An owner was transferred to you: '+owner.name,'owners','ownertransfer_to_'+owner.id+'_'+now());
+  notify(fromSpId,'system','An owner was transferred from you: '+owner.name,'owners','ownertransfer_from_'+owner.id+'_'+now());
+  persist();
+  return movedRelCount;
+}
+// PART 4 — company-wide (both teams), Head-Admin-only view of expired owner-unit relationships.
+// Previously self-service (see the removed "Available Pool" section of pages/owners.js); now an
+// admin directly reassigns a specific relationship to a chosen salesperson — this changes ONLY
+// that one relationship, never the owner's other units, matching the original feature's own
+// documented behavior ("claiming one does not affect the owner's other units").
+function expiredOwnerUnitsCompanyWide(){
+  return DB.ownerUnits.filter(r=>{
+    if(r.status!=='active') return false;
+    const o = DB.owners.find(x=>x.id===r.ownerId);
+    if(!o || o.deletedAt) return false;
+    const un = DB.units.find(x=>x.id===r.unitId);
+    if(un && un.deletedAt) return false;
+    return ownerExpiryState(r.lastUpdateAt)==='expired';
+  });
 }
 
 /* ---------- Automatic duplicate-owner detection ----------
@@ -508,7 +609,9 @@ function buildDemoData(){
     // pages/announcements.js). Starts empty; one row per sent announcement, newest first in use.
     announcements: [],
     notifications: [], auditLog: [],
-    meta: { version: 5 }
+    // version 6: owners/units gained deletedAt/deletedBy (soft delete, Part 1) and units gained
+    // updatedAt (set on edit/delete/restore). Additive-only — see loadDB() for the migration note.
+    meta: { version: 6 }
   };
 }
 
@@ -678,14 +781,42 @@ function sendAnnouncement(author, title, message){
   return a;
 }
 
+// Migration v5 -> v6: adds owners.deletedAt/deletedBy and units.deletedAt/deletedBy/updatedAt
+// (Part 1 — soft delete). This is an IN-PLACE, additive-only migration: every existing owner
+// and unit is kept exactly as-is, only missing fields are filled in with their "not deleted"
+// default — nothing is dropped, regenerated, or reordered, so any data already saved in this
+// browser (including anything a user created in a prior session) survives the upgrade.
+function migrateV5toV6(parsed){
+  (parsed.owners||[]).forEach(o=>{
+    if(!('deletedAt' in o)) o.deletedAt = null;
+    if(!('deletedBy' in o)) o.deletedBy = null;
+  });
+  (parsed.units||[]).forEach(x=>{
+    if(!('deletedAt' in x)) x.deletedAt = null;
+    if(!('deletedBy' in x)) x.deletedBy = null;
+    if(!('updatedAt' in x)) x.updatedAt = x.createdAt || now();
+  });
+  parsed.meta.version = 6;
+  return parsed;
+}
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){ const parsed = JSON.parse(raw); if(parsed && parsed.meta && parsed.meta.version===5) return parsed; }
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(parsed && parsed.meta && parsed.meta.version===6) return parsed;
+      if(parsed && parsed.meta && parsed.meta.version===5){
+        const migrated = migrateV5toV6(parsed);
+        saveDB(migrated);
+        return migrated;
+      }
+    }
   }catch(e){ console.warn('load failed', e); }
-  // Version 1 (bare owner "units" count, no Daily Report module) is superseded by the
-  // real Owner<->Unit relationship model — demo data is regenerated rather than migrated,
-  // since it is seeded/demo data only, not real production records.
+  // Any other/older version (or no saved data yet) — Version 1 (bare owner "units" count, no
+  // Daily Report module, no owner/unit relationship model) predates a structural change too
+  // large to migrate field-by-field, so demo data is regenerated rather than migrated, since it
+  // is seeded/demo data only, not real production records. v5 -> v6 (above) is a real migration
+  // because the v5 shape is otherwise still fully compatible.
   const fresh = buildDemoData();
   saveDB(fresh);
   return fresh;

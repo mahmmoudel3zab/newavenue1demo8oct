@@ -157,6 +157,20 @@ tr:last-child td{border-bottom:none;}
 @keyframes toastin{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;}}
 .scrim-photo{aspect-ratio:4/3; border-radius:var(--radius-s); background:linear-gradient(135deg,var(--surface-3),var(--brand-tint)); display:flex;align-items:center;justify-content:center; color:var(--text-faint); font-size:11px; font-weight:700;}
 
+/* ---------- News Feed unit card (Inventory grid) ---------- */
+.unit-card{overflow:hidden; cursor:pointer;}
+.uc-photo{border-radius:0; aspect-ratio:16/10;}
+.uc-body{padding-top:12px;}
+.uc-toprow{display:flex; justify-content:space-between; gap:6px;}
+.uc-title{font-weight:800; font-size:13.5px;}
+.uc-subline{font-size:11.5px; color:var(--text-faint); margin:2px 0 8px;}
+.uc-specs{display:flex; gap:10px; font-size:11px; color:var(--text-muted); margin-bottom:8px; flex-wrap:wrap;}
+.uc-divider{margin:8px 0;}
+.uc-pricegrid{display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11.5px;}
+.uc-pricelabel{color:var(--text-faint);}
+.uc-priceval{font-weight:800;}
+.uc-pricesub{font-weight:700;}
+
 @media (max-width: 880px){
   .sidebar{display:none;}
   .grid-3{grid-template-columns:1fr;}
@@ -184,6 +198,27 @@ tr:last-child td{border-bottom:none;}
 @media (max-width:360px){
   .mtab{font-size:9px;}
   .mtab svg{width:18px;height:18px;}
+}
+
+/* ---------- Part 7: compact News Feed (Inventory) unit cards on mobile ----------
+   Shorter photo strip, tighter padding and smaller type so more units fit on screen with less
+   scrolling, at the widths the spec calls out (~430px, ~375px, ~320px) — no field is removed,
+   only the spacing around them. Desktop (> 520px) keeps the original, larger layout untouched. */
+@media (max-width:520px){
+  .uc-photo{aspect-ratio:2.6/1; font-size:10px;}
+  .uc-body{padding:10px 12px 12px;}
+  .uc-title{font-size:13px;}
+  .uc-subline{margin:1px 0 6px; font-size:11px;}
+  .uc-specs{gap:8px; margin-bottom:6px; font-size:10.5px;}
+  .uc-divider{margin:6px 0;}
+  .uc-pricegrid{gap:4px 10px; font-size:11px;}
+}
+@media (max-width:400px){
+  .uc-photo{aspect-ratio:3/1;}
+  .uc-body{padding:9px 10px 10px;}
+  .uc-title{font-size:12.5px;}
+  .uc-specs{gap:7px; font-size:10px;}
+  .uc-pricegrid{gap:3px 8px; font-size:10.5px;}
 }
 @media (max-width:520px){ .modal{border-radius:14px 14px 0 0; margin-top:auto; max-height:88vh;} .modal-backdrop{align-items:flex-end; padding:0;} }
 
