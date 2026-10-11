@@ -23,7 +23,7 @@ function renderAdminPage(u){
   else if(tab==='deletedowners') body = renderAdminDeletedOwners(u);
   else if(tab==='deletedunits') body = renderAdminDeletedUnits(u);
   return `
-  <div style="margin-bottom:10px;"><span class="badge badge-brand">${ROLE_LABELS[u.role]}</span></div>
+  <div style="margin-bottom:10px;"><span class="badge badge-brand">${esc(displayTitle(u))}</span></div>
   <div class="tabs" style="overflow-x:auto; flex-wrap:nowrap;">${tabs.map(([k,l])=>`<button class="tab-btn ${tab===k?'active':''}" data-admintab="${k}" style="white-space:nowrap;">${l}</button>`).join('')}</div>
   ${body}`;
 }
@@ -47,8 +47,10 @@ function renderAdminUsers(u){
   const canManage = canManageUsers(u);
   const q = (session._adminUserSearch||'').trim().toLowerCase();
   const roleFilter = session._adminRoleFilter || '';
+  const reviewOnly = !!session._adminReviewOnly;
   let list = DB.users.slice();
   if(roleFilter) list = list.filter(x=>x.role===roleFilter);
+  if(reviewOnly) list = list.filter(x=>x.titleNeedsReview);
   if(q){
     list = list.filter(x=>{
       const ref = DB.refs.find(r=>r.userId===x.id);
@@ -56,6 +58,7 @@ function renderAdminUsers(u){
     });
   }
   list = list.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const reviewCount = DB.users.filter(x=>x.titleNeedsReview).length;
   return `
   <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
     <div class="search-field" style="flex:1; min-width:200px;">
@@ -64,20 +67,25 @@ function renderAdminUsers(u){
     <select id="adminRoleFilter" style="width:auto;">${ADMIN_ROLE_FILTER_GROUPS.map(([v,l])=>`<option value="${v}" ${roleFilter===v?'selected':''}>${l}</option>`).join('')}</select>
     ${canManage?`<button class="btn btn-primary btn-sm" id="addSalesUserBtn">${ic('plus')} Add sales user</button>`:''}
   </div>
-  ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
-  <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Name</th><th>Role</th><th>Department</th><th>Reports to</th><th>Reference</th>${canManage?'<th></th>':''}</tr></thead><tbody>
+  ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department, job title and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
+  ${reviewCount? `<div class="card card-pad" style="margin-bottom:14px; background:var(--warning-tint); border-color:var(--warning); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <div style="flex:1; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
+    <button class="btn btn-sm ${reviewOnly?'btn-primary':''}" id="toggleReviewOnlyBtn">${reviewOnly?'Showing review-only — show all':'Show accounts needing review'}</button>
+  </div>` : ''}
+  <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Name</th><th>Role</th><th>Job Title</th><th>Department</th><th>Reports to</th><th>Reference</th>${canManage?'<th></th>':''}</tr></thead><tbody>
   ${list.length? list.map(x=>{
     const mgr = DB.users.find(m=>m.id===x.managerId);
     const ref = DB.refs.find(r=>r.userId===x.id);
     return `<tr>
       <td style="font-weight:700;">${esc(x.name)}${x.id===u.id?' <span class="badge badge-muted">You</span>':''}</td>
       <td>${esc(ROLE_LABELS[x.role])}</td>
+      <td>${esc(displayTitle(x))}${x.titleNeedsReview?' <span class="badge badge-pending" title="Default title — needs Senior/Head Admin confirmation">Review</span>':''}</td>
       <td>${x.team?`<span class="team-pill ${x.team}">${x.team}</span>`:'—'}</td>
       <td>${esc(mgr?mgr.name:'—')}</td>
       <td>${ref?`<span class="badge badge-brand">${esc(ref.code)}</span>`:'—'}</td>
       ${canManage?`<td><button class="btn btn-sm" data-manageuser="${x.id}">Manage</button></td>`:''}
     </tr>`;
-  }).join('') : `<tr><td colspan="6">${emptyRow('No users match this search/filter.')}</td></tr>`}
+  }).join('') : `<tr><td colspan="7">${emptyRow('No users match this search/filter.')}</td></tr>`}
   </tbody></table></div>`;
 }
 
@@ -92,7 +100,7 @@ function openUserAdminModal(userId, u){
   openModal(`
   <div class="modal-head"><div style="font-weight:800;">Manage — ${esc(target.name)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
   <div class="modal-body">
-    ${isSelf?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12px; color:var(--warning);">You're editing your own account. Role, department and manager cannot be changed here — an administrative action can't grant its own user higher privileges.</div>`:''}
+    ${isSelf?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12px; color:var(--warning);">You're editing your own account. Role, department, manager and job title cannot be changed here — an administrative action can't grant its own user higher privileges or confirm its own job title.</div>`:''}
     <div class="field"><label class="field-label">Name</label><input id="ua_name" value="${esc(target.name)}"></div>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
       <div class="field"><label class="field-label">Role</label>
@@ -111,6 +119,13 @@ function openUserAdminModal(userId, u){
         <option value="">— No manager (top of hierarchy)</option>
         ${mgrOptions.map(m=>`<option value="${m.id}" ${target.managerId===m.id?'selected':''}>${esc(m.name)} — ${esc(ROLE_LABELS[m.role])}</option>`).join('')}
       </select>
+    </div>
+    <div class="field"><label class="field-label">Job title${target.titleNeedsReview?' <span class="badge badge-pending" style="margin-left:4px;">Needs review</span>':''}</label>
+      <select id="ua_jobtitle" ${isSelf?'disabled':''}>
+        <option value="">— No sales job title (administrative role)</option>
+        ${JOB_TITLES.map(t=>`<option value="${t}" ${target.jobTitle===t?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <div style="font-size:11px; color:var(--text-faint); margin-top:4px;">This is purely descriptive — it never changes what this account can do. Permissions come from Role above.</div>
     </div>
     <div class="divider"></div>
     <div class="section-sub" style="margin-bottom:10px;" id="ua_refNote">Reference directory details ${ref?'':'(created once this person is sales-active with a department assigned)'}</div>
@@ -149,12 +164,14 @@ function openUserAdminModal(userId, u){
     const newRole = isSelf ? target.role : document.getElementById('ua_role').value;
     const newTeam = isSelf ? target.team : (document.getElementById('ua_team').value || null);
     const newManagerId = isSelf ? target.managerId : (document.getElementById('ua_manager').value || null);
+    const newJobTitle = isSelf ? target.jobTitle : (document.getElementById('ua_jobtitle').value || null);
 
     const roleChanged = newRole!==target.role;
     const teamChanged = newTeam!==target.team;
     const managerChanged = newManagerId!==target.managerId;
+    const jobTitleChanged = newJobTitle!==target.jobTitle;
 
-    if(roleChanged || teamChanged || managerChanged){
+    if(roleChanged || teamChanged || managerChanged || jobTitleChanged){
       const lines = [];
       if(roleChanged) lines.push(`Role: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[newRole]}`);
       if(teamChanged) lines.push(`Department: ${target.team?target.team:'—'} → ${newTeam?newTeam:'—'}`);
@@ -162,6 +179,7 @@ function openUserAdminModal(userId, u){
         const oldMgr = DB.users.find(m=>m.id===target.managerId), newMgr = DB.users.find(m=>m.id===newManagerId);
         lines.push(`Reports to: ${oldMgr?oldMgr.name:'—'} → ${newMgr?newMgr.name:'—'}`);
       }
+      if(jobTitleChanged) lines.push(`Job title: ${target.jobTitle||'—'} → ${newJobTitle||'—'}`);
       const ok = confirm(`Apply these changes to ${target.name}?\n\n${lines.join('\n')}\n\nThis affects their reporting relationships and what they can see across the app.`);
       if(!ok) return;
     }
@@ -182,7 +200,10 @@ function openUserAdminModal(userId, u){
     }
 
     target.name = name;
-    if(!isSelf){ target.role = newRole; target.team = newTeam; target.managerId = newManagerId; }
+    if(!isSelf){
+      target.role = newRole; target.team = newTeam; target.managerId = newManagerId;
+      if(jobTitleChanged){ target.jobTitle = newJobTitle; target.titleNeedsReview = false; }
+    }
     syncRefForUser(target); // creates/removes/updates the ref entry to match the new role+team
     const refAfter = DB.refs.find(r=>r.userId===target.id);
     if(refAfter && willBeEligible){
@@ -208,6 +229,9 @@ function openAddSalesUserModal(u){
     </div>
     <div class="field"><label class="field-label">Reports to</label>
       <select id="nu_manager"><option value="">— No manager (top of hierarchy)</option>${mgrOptions.map(m=>`<option value="${m.id}">${esc(m.name)} — ${esc(ROLE_LABELS[m.role])}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label class="field-label">Job title</label>
+      <select id="nu_jobtitle"><option value="">— Set later / not applicable</option>${JOB_TITLES.map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
     </div>
     <div class="divider"></div>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
@@ -237,7 +261,8 @@ function openAddSalesUserModal(u){
       if(!isDigitsOnly(phone) || !normalizeEgyptPhone(phone)){ toast('Enter a valid phone number (digits only)'); return; }
       if(!isDigitsOnly(wa) || !normalizeEgyptPhone(wa)){ toast('Enter a valid WhatsApp number (digits only)'); return; }
     }
-    const newUser = { id: uid('u'), name, role, team, managerId, avatar: avatarColor(name) };
+    const jobTitle = document.getElementById('nu_jobtitle').value || null;
+    const newUser = { id: uid('u'), name, role, team, managerId, avatar: avatarColor(name), jobTitle, titleNeedsReview:false };
     DB.users.push(newUser);
     syncRefForUser(newUser);
     if(willBeEligible){
@@ -443,6 +468,7 @@ AFTER_RENDER.admin = function(u){
     us.addEventListener('blur', ()=>{ session._adminUserSearchFocused = false; });
   }
   const rf = document.getElementById('adminRoleFilter'); if(rf) rf.addEventListener('change', ()=>{ session._adminRoleFilter = rf.value; renderPageInto(u); });
+  const trb = document.getElementById('toggleReviewOnlyBtn'); if(trb) trb.addEventListener('click', ()=>{ session._adminReviewOnly = !session._adminReviewOnly; renderPageInto(u); });
   const au = document.getElementById('addSalesUserBtn'); if(au) au.addEventListener('click', ()=> openAddSalesUserModal(u));
   document.querySelectorAll('[data-manageuser]').forEach(b=> b.addEventListener('click', ()=> openUserAdminModal(b.dataset.manageuser, u)));
   document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', ()=>{

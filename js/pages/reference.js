@@ -38,7 +38,7 @@ function referenceRow(r,person,u){
         <span style="font-weight:700; font-size:13.5px;">${esc(person.name)}</span>
         <span class="badge badge-brand">${esc(r.code)}</span>
       </div>
-      <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${esc(ROLE_LABELS[person.role]||person.role)}${mgr?' · reports to '+esc(mgr.name):''}</div>
+      <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${esc(displayTitle(person))}${mgr?' · reports to '+esc(mgr.name):''}</div>
     </div>
     <div class="contact-actions">
       <a class="btn btn-sm btn-call" href="${telHref(r.phone)}" data-refphone="${r.id}">${ic('phone')} ${esc(r.phone)}</a>

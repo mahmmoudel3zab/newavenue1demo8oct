@@ -33,13 +33,13 @@ function renderDashboard(u){
     } else {
       banner = `<div class="card card-pad" style="margin-bottom:18px;">
         <div class="section-title">Welcome back, ${esc(u.name.split(' ')[0])}</div>
-        <div class="section-sub">${ROLE_LABELS[u.role]}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
+        <div class="section-sub">${esc(displayTitle(u))}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
       </div>`;
     }
   } else {
     banner = `<div class="card card-pad" style="margin-bottom:18px;">
       <div class="section-title">Welcome back, ${esc(u.name.split(' ')[0])}</div>
-      <div class="section-sub">${ROLE_LABELS[u.role]}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
+      <div class="section-sub">${esc(displayTitle(u))}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
     </div>`;
   }
 
@@ -79,7 +79,7 @@ function renderDashboard(u){
         const ds = effectiveTodayStr();
         const st = isOnOrAfterLaunch(ds) ? personalReportStatus(su, ds) : 'n/a';
         const stBadge = st==='completed' ? '<span class="badge badge-success">Completed</span>' : st==='in_progress' ? '<span class="badge badge-pending">In progress</span>' : st==='missing' ? '<span class="badge badge-fresh">Missing</span>' : '<span class="badge badge-muted">—</span>';
-        return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(ROLE_LABELS[su.role])}</td><td>${stBadge}</td><td>${sun}</td><td>${so} / 30</td></tr>`;
+        return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(displayTitle(su))}</td><td>${stBadge}</td><td>${sun}</td><td>${so} / 30</td></tr>`;
       }).join('') : emptyRow('No team members yet.')}
       </tbody></table>
     </div>`;
@@ -136,7 +136,7 @@ function dashboardRefRow(r,person){
     <span class="avatar" style="background:${avatarColor(person.name)}; width:30px;height:30px; font-size:11px; flex-shrink:0;">${initials(person.name)}</span>
     <div style="flex:1; min-width:0;">
       <div style="font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(person.name)}</div>
-      <div style="font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(ROLE_LABELS[person.role]||person.role)}</div>
+      <div style="font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(displayTitle(person))}</div>
     </div>
     <a class="icon-btn" style="text-decoration:none;" href="${telHref(r.phone)}" title="Call ${esc(person.name)}">${ic('phone')}</a>
     <a class="icon-btn" style="text-decoration:none;" href="${waHref(r.whatsapp)}" target="_blank" rel="noopener" title="WhatsApp ${esc(person.name)}">${ic('whatsapp')}</a>

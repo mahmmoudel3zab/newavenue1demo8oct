@@ -28,14 +28,14 @@ const LOGIN_GROUPS = [
 ];
 function renderLogin(){
   const q = (session._loginSearch||'').trim().toLowerCase();
-  const matches = (u)=> !q || u.name.toLowerCase().includes(q) || ROLE_LABELS[u.role].toLowerCase().includes(q);
+  const matches = (u)=> !q || u.name.toLowerCase().includes(q) || displayTitle(u).toLowerCase().includes(q);
   const cardFor = (id)=>{
     const u = DB.users.find(x=>x.id===id); if(!u || !matches(u)) return '';
     return `<button class="login-card" data-uid="${u.id}">
       <span class="avatar login-card-avatar" style="background:${u.avatar}">${initials(u.name)}</span>
       <span class="login-card-info">
         <span class="login-card-name">${esc(u.name)}</span>
-        <span class="login-card-role">${ROLE_LABELS[u.role]}${u.team?' · '+ (u.team[0].toUpperCase()+u.team.slice(1)):''}</span>
+        <span class="login-card-role">${esc(displayTitle(u))}${u.team?' · '+ (u.team[0].toUpperCase()+u.team.slice(1)):''}</span>
       </span>
       ${ic('chevron')}
     </button>`;
@@ -135,7 +135,7 @@ function renderShell(u){
       <button class="icon-btn" id="topNotifBtn">${ic('notif')}${unreadNotifCount(u)>0?`<span class="dot-badge">${unreadNotifCount(u)>9?'9+':unreadNotifCount(u)}</span>`:''}</button>
       <div class="user-chip">
         <span class="avatar" style="background:${u.avatar}; width:26px;height:26px;font-size:11px;">${initials(u.name)}</span>
-        <span><span class="user-chip-name" style="display:block;">${esc(u.name)}</span><span class="user-chip-role">${ROLE_LABELS[u.role]}</span></span>
+        <span><span class="user-chip-name" style="display:block;">${esc(u.name)}</span><span class="user-chip-role">${esc(displayTitle(u))}</span></span>
       </div>
     </div>
     <div class="page" id="pageRoot"></div>

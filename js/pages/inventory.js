@@ -270,7 +270,7 @@ function unitSheetHTML(un, sp){
         <span class="ns-agent-avatar">${esc(initials(sp?sp.name:'NA'))}</span>
         <div>
           <div class="ns-agent-name">${esc(sp?sp.name:'New Avenue Consultant')}</div>
-          <div class="ns-agent-role">${esc(sp?ROLE_LABELS[sp.role]:'')}</div>
+          <div class="ns-agent-role">${esc(sp?displayTitle(sp):'')}</div>
           <div class="ns-agent-contact">${esc(spPhone)} · WhatsApp ${esc(spWa)}</div>
         </div>
       </div>

@@ -119,7 +119,7 @@ function renderTeamReportsView(u){
       const show = r ? (fmtVal(r.showings.buyer)+' / '+fmtVal(r.showings.seller)) : '—';
       const mtg = r ? (fmtVal(r.meetings.buyer)+' / '+fmtVal(r.meetings.seller)+' / '+fmtVal(r.meetings.developer)) : '—';
       const closed = r ? fmtVal(r.other.closedDeals) : '—';
-      return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(ROLE_LABELS[su.role])}</td><td>${stBadge}</td><td>${calls}</td><td>${show}</td><td>${mtg}</td><td>${closed}</td></tr>`;
+      return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(displayTitle(su))}</td><td>${stBadge}</td><td>${calls}</td><td>${show}</td><td>${mtg}</td><td>${closed}</td></tr>`;
     }).join('')}
     </tbody></table>
   </div>` : ''}
@@ -131,7 +131,7 @@ function renderTeamReportsView(u){
       const stBadge = submitted===null ? '<span class="badge badge-muted">—</span>' : submitted ? '<span class="badge badge-success">Submitted</span>' : '<span class="badge badge-fresh">Missing</span>';
       return `<div class="card-pad" style="border-bottom:1px solid var(--border);">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:5px; flex-wrap:wrap;">
-          <span style="font-weight:700; font-size:13px;">${esc(mu.name)}</span><span style="font-size:11px; color:var(--text-faint);">${esc(ROLE_LABELS[mu.role])}</span>${stBadge}
+          <span style="font-weight:700; font-size:13px;">${esc(mu.name)}</span><span style="font-size:11px; color:var(--text-faint);">${esc(displayTitle(mu))}</span>${stBadge}
         </div>
         ${r && (r.comments||r.activities) ? `
         <div style="font-size:12px; color:var(--text-muted); margin-bottom:3px;"><b>Comments:</b> ${esc(r.comments||'—')}</div>

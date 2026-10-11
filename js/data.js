@@ -59,6 +59,37 @@ const ADMIN_ROLES = ['junioradmin','senioradmin','headadmin'];
 const TOP_ROLES = ['headofsales','ceo']; // company-wide, can view both teams
 const HR_ROLES = ['headhr'];
 
+/* ---------- Official job titles (PART 1 — Account Hierarchy & Job Titles) ----------
+   These 9 titles are the company's official sales job titles, ordered lowest to highest.
+   JOB TITLE != SYSTEM ROLE/PERMISSION: `role` above (salesperson/teamleader/manager/.../headadmin)
+   is still the ONLY thing any permission check (isAdmin/isMgmt/isTopExec/isHeadHR/requireAdmin on
+   the backend) ever reads. `jobTitle` is a separate, purely descriptive field — changing it can
+   never grant or remove any access. This mirrors the backend's job_title column (na1-backend/src/db.js),
+   which carries the identical 9-value CHECK constraint, kept in sync by hand since the two layers
+   are not wired together yet (see README "frontend/backend remain unwired").
+   "Salesperson" is intentionally NOT in this list — it is no longer an available job title,
+   though `role:'salesperson'` remains the permission-granting value (renaming the role enum
+   itself would be an unnecessary, risk-adding rewrite of the whole authorization system, which
+   the spec explicitly says to avoid — "retain existing internal role identifiers wherever
+   practical"). */
+const JOB_TITLES = [
+  'Junior Sales','Senior Sales','Sales Supervisor','Team Leader','Sales Manager',
+  'Senior Sales Manager','Director','Head of Sales','CEO'
+];
+function jobTitleIndex(title){ return JOB_TITLES.indexOf(title); }
+// The label shown everywhere a person's "title" appears (Reference, Admin, profile, badges,
+// dashboards). Falls back sensibly for accounts that don't hold one of the 9 sales titles:
+// pure administrative roles (Junior/Senior/Head Admin) and Head of HR show their functional
+// position instead (they are not part of the sales hierarchy and were never asked to be), and
+// a salesperson-role account whose title is still ambiguous (see migrateTitlesV6toV7 below)
+// clearly says so rather than silently showing nothing or a guessed value as if it were final.
+function displayTitle(u){
+  if(u.jobTitle) return u.jobTitle;
+  if(u.titleNeedsReview) return 'Title pending review';
+  if(isAdmin(u) || isHeadHR(u)) return ROLE_LABELS[u.role];
+  return ROLE_LABELS[u.role]; // safety fallback — should not normally be reached
+}
+
 function isAdmin(u){ return ADMIN_ROLES.includes(u.role); }
 function isMgmt(u){ return MGMT_ROLES.includes(u.role); }
 function isTopExec(u){ return TOP_ROLES.includes(u.role); }
@@ -91,33 +122,41 @@ function pick(arr){ return arr[rndInt(0,arr.length-1)]; }
 function pickMany(arr,n){ const c=[...arr]; const out=[]; for(let i=0;i<n && c.length;i++){ out.push(c.splice(rndInt(0,c.length-1),1)[0]); } return out; }
 
 /* ---------- Build demo users ---------- */
+// title: one of JOB_TITLES, or null. needsReview: true for accounts whose title is a
+// best-effort default, not yet confirmed by an admin (see PART 1.1 — "Report accounts with
+// missing, obsolete, or ambiguous titles for review" / migrateTitlesV6toV7 below for the
+// identical logic applied to accounts saved under the pre-this-round data version).
 function buildUsers(){
   const u = [];
-  const add = (id,name,role,team,managerId)=> u.push({id,name,role,team,managerId,avatar:avatarColor(name)});
+  const add = (id,name,role,team,managerId,title,needsReview)=> u.push({id,name,role,team,managerId,avatar:avatarColor(name),jobTitle:title||null,titleNeedsReview:!!needsReview});
   // Residential
-  add('ceo1','Ahmed El Sayed','ceo',null,null);
-  add('hos1','Rania Fahmy','headofsales',null,'ceo1');
-  add('dir1','Amr Hassan','director','residential','hos1');
-  add('m1','Dina Youssef','manager','residential','dir1');
-  add('tl1','Hossam Nabil','teamleader','residential','m1');
-  add('s1','Mona Adel','salesperson','residential','tl1');
-  add('s2','Karim Fathy','salesperson','residential','tl1');
-  add('s3','Yara Ali','salesperson','residential','tl1');
-  add('s6','Omar Sherif','salesperson','residential','tl1');
+  add('ceo1','Ahmed El Sayed','ceo',null,null,'CEO',false);
+  add('hos1','Rania Fahmy','headofsales',null,'ceo1','Head of Sales',false);
+  add('dir1','Amr Hassan','director','residential','hos1','Director',false);
+  add('m1','Dina Youssef','manager','residential','dir1','Sales Manager',false);
+  add('tl1','Hossam Nabil','teamleader','residential','m1','Team Leader',false);
+  // role:'salesperson' has no unambiguous mapping to Junior vs Senior Sales (nothing in the
+  // existing data distinguishes tenure) — each gets a sensible default so the app and the new
+  // Title Review admin screen both have real, varied examples, but is flagged needsReview so a
+  // Senior/Head Admin must confirm or correct it (see admin.js "Title review" tab).
+  add('s1','Mona Adel','salesperson','residential','tl1','Senior Sales',true);
+  add('s2','Karim Fathy','salesperson','residential','tl1','Junior Sales',true);
+  add('s3','Yara Ali','salesperson','residential','tl1','Senior Sales',true);
+  add('s6','Omar Sherif','salesperson','residential','tl1','Junior Sales',true);
   // Commercial
-  add('dir2','Heba El Nagar','director','commercial','hos1');
-  add('m2','Sherif Adel','manager','commercial','dir2');
-  add('tl2','Nour Khaled','teamleader','commercial','m2');
-  add('s4','Tarek Samir','salesperson','commercial','tl2');
-  add('s5','Lobna Adly','salesperson','commercial','tl2');
-  add('s7','Farida Gamal','salesperson','commercial','tl2');
-  // Admins
-  add('ja1','Salma Ezz','junioradmin',null,null);
-  add('sa1','Mostafa Reda','senioradmin',null,null);
-  add('ha1','Laila Mansour','headadmin',null,null);
+  add('dir2','Heba El Nagar','director','commercial','hos1','Director',false);
+  add('m2','Sherif Adel','manager','commercial','dir2','Sales Manager',false);
+  add('tl2','Nour Khaled','teamleader','commercial','m2','Team Leader',false);
+  add('s4','Tarek Samir','salesperson','commercial','tl2','Junior Sales',true);
+  add('s5','Lobna Adly','salesperson','commercial','tl2','Senior Sales',true);
+  add('s7','Farida Gamal','salesperson','commercial','tl2','Junior Sales',true);
+  // Admins — pure administrative positions, not sales job titles (see displayTitle()); left null.
+  add('ja1','Salma Ezz','junioradmin',null,null,null,false);
+  add('sa1','Mostafa Reda','senioradmin',null,null,null,false);
+  add('ha1','Laila Mansour','headadmin',null,null,null,false);
   // Human Resources — a separate function from the admin hierarchy above; this is the only
   // account the Company Announcements compose screen is available to (see pages/announcements.js).
-  add('hr1','Yasmin Adly','headhr',null,null);
+  add('hr1','Yasmin Adly','headhr',null,null,null,false);
   return u;
 }
 
@@ -572,6 +611,20 @@ function syncRefForUser(user){
     DB.refs = DB.refs.filter(r=>r.id!==existing.id);
   }
 }
+// Sets a user's official job title. Mirrors the backend's self-escalation guard
+// (PATCH /api/users/:id/job-title in na1-backend) — this frontend check is a convenience only,
+// consistent with how the rest of this prototype already works (no real server sits behind it);
+// the backend route is the actual enforcement. Returns {ok:true} or {ok:false, error}.
+function setUserJobTitle(actor, target, newTitle){
+  if(!canManageUsers(actor)) return {ok:false, error:'Only Senior Admin or Head Admin can edit job titles'};
+  if(actor.id===target.id) return {ok:false, error:'You cannot change your own job title'};
+  if(newTitle!==null && !JOB_TITLES.includes(newTitle)) return {ok:false, error:'Invalid job title'};
+  target.jobTitle = newTitle;
+  target.titleNeedsReview = false;
+  log(actor.id, 'user_job_title_changed', {userId:target.id, jobTitle:newTitle});
+  persist();
+  return {ok:true};
+}
 // Every role a user COULD report to, i.e. not themselves and not anyone already in their own
 // downline (prevents creating a reporting cycle, e.g. assigning your own subordinate as your
 // manager). Used to populate the "Reports to" selector sensibly rather than just excluding self.
@@ -609,9 +662,11 @@ function buildDemoData(){
     // pages/announcements.js). Starts empty; one row per sent announcement, newest first in use.
     announcements: [],
     notifications: [], auditLog: [],
+    // version 7: users gained jobTitle/titleNeedsReview (official job titles, this round's PART 1)
+    // and announcements gained an `audience` field (recipient targeting, this round's PART 2).
     // version 6: owners/units gained deletedAt/deletedBy (soft delete, Part 1) and units gained
     // updatedAt (set on edit/delete/restore). Additive-only — see loadDB() for the migration note.
-    meta: { version: 6 }
+    meta: { version: 7 }
   };
 }
 
@@ -765,18 +820,85 @@ function announcementsHistory(){
 function getAnnouncement(id){
   return DB.announcements.find(a=>a.id===id) || null;
 }
-// Sends a company-wide announcement AND the real notifications that go with it, in one atomic
-// step — there is no "sent" state that isn't backed by both the announcement record and an
-// actual notification per recipient; this app has no separate server to fail independently of
-// the local persistence both already share (persist()), so there is nothing here that could
-// report success while silently not delivering.
-function sendAnnouncement(author, title, message){
-  const a = { id: uid('an'), title, message, byId: author.id, at: now() };
+/* ---------- Recipient targeting (PART 2 — HR Announcement Recipient Selection) ----------
+   `audience` shape: {type:'everyone'} | {type:'job_titles', jobTitles:[...]} |
+   {type:'team', team:'residential'|'commercial'} | {type:'employees', employeeIds:[...]}.
+   computeAnnouncementRecipients ALWAYS resolves against the live DB.users — never against a
+   list the composer UI might pass in directly — so the exact same criteria re-evaluated later
+   (e.g. for a dry-run summary) always reflects the real, current directory. The sender
+   themselves is never included (matches the previous "sent to all employees" behavior, which
+   also excluded the sender). Recipients are deduplicated automatically since this returns a
+   Set-backed list even when a user could match more than one criterion (not reachable today
+   since each announcement has exactly one audience type, but kept safe for future combining). */
+function computeAnnouncementRecipients(audience, authorId){
+  const a = audience || {type:'everyone'};
+  let pool;
+  if(a.type==='everyone'){
+    pool = DB.users.slice();
+  } else if(a.type==='job_titles'){
+    const titles = (a.jobTitles||[]).filter(t=>JOB_TITLES.includes(t));
+    pool = DB.users.filter(u=>titles.includes(u.jobTitle));
+  } else if(a.type==='team'){
+    pool = DB.users.filter(u=>u.team===a.team);
+  } else if(a.type==='employees'){
+    const ids = new Set(a.employeeIds||[]);
+    pool = DB.users.filter(u=>ids.has(u.id));
+  } else {
+    pool = [];
+  }
+  const seen = new Set();
+  const out = [];
+  pool.forEach(u=>{ if(u.id!==authorId && !seen.has(u.id)){ seen.add(u.id); out.push(u); } });
+  return out;
+}
+// Human-readable one-line summary of an audience, used in the compose confirmation dialog and
+// in the Head of HR's sent-history list (e.g. "2 job titles selected", "Everyone").
+function audienceSummaryLabel(audience){
+  const a = audience || {type:'everyone'};
+  if(a.type==='everyone') return 'Everyone';
+  if(a.type==='job_titles') return (a.jobTitles||[]).length+' job title'+((a.jobTitles||[]).length===1?'':'s')+' selected';
+  if(a.type==='team') return (a.team==='residential'?'Residential':'Commercial')+' team selected';
+  if(a.type==='employees') return (a.employeeIds||[]).length+' employee'+((a.employeeIds||[]).length===1?'':'s')+' selected';
+  return 'Unknown audience';
+}
+// Is this user one of the resolved recipients of this already-sent announcement? Recipients are
+// recomputed live from the STORED audience criteria (not a frozen id list) so this stays correct
+// even for old data — see migrateV6toV7, which backfills audience:{type:'everyone'} on every
+// announcement sent before this round, matching their actual historical behavior exactly.
+function isAnnouncementRecipient(announcement, userId){
+  if(announcement.byId===userId) return true; // the sender can always re-open their own sends
+  return computeAnnouncementRecipients(announcement.audience, announcement.byId).some(u=>u.id===userId);
+}
+// Announcements a given user is allowed to see: Head of HR sees everything they sent (their own
+// full history); everyone else sees only announcements whose resolved audience includes them.
+// This mirrors the backend's enforced GET /api/announcements behavior (routes/announcements.js)
+// so the frontend demo layer cannot show more than the real API would ever return.
+function visibleAnnouncementsFor(u){
+  if(isHeadHR(u)) return announcementsHistory().filter(a=>a.byId===u.id);
+  return announcementsHistory().filter(a=>isAnnouncementRecipient(a,u.id));
+}
+// Sends an announcement to a SPECIFIC, resolved audience AND the real notifications that go with
+// it, in one atomic step — there is no "sent" state that isn't backed by both the announcement
+// record and an actual notification per resolved recipient; this app has no separate server to
+// fail independently of the local persistence both already share (persist()), so there is
+// nothing here that could report success while silently not delivering.
+// Recipients are frozen as a NOTIFICATION list at send time (each recipient gets exactly one
+// notify() call, deduped by key same as every other notification type), but the announcement's
+// VISIBILITY (who can open/read it later, via isAnnouncementRecipient above) recomputes the
+// audience criteria live. In this demo data model audience criteria are immutable after send —
+// there is no "edit recipients" action — so the two always agree in practice; this matches the
+// backend's design choice (see routes/announcements.js) of never changing recipients after
+// publish, which avoids ever silently exposing a restricted announcement to a new employee or
+// silently revoking it from someone already notified.
+function sendAnnouncement(author, title, message, audience){
+  const aud = audience || {type:'everyone'};
+  const recipients = computeAnnouncementRecipients(aud, author.id);
+  const a = { id: uid('an'), title, message, byId: author.id, at: now(), audience: aud, recipientCount: recipients.length };
   DB.announcements.unshift(a);
-  DB.users.filter(u=>u.id!==author.id).forEach(u=>{
+  recipients.forEach(u=>{
     notify(u.id, 'announcement', 'New company announcement: '+title, 'announcements', 'announcement_'+a.id, {announcementId:a.id});
   });
-  log(author.id, 'announcement_sent', {announcementId:a.id, title});
+  log(author.id, 'announcement_sent', {announcementId:a.id, title, audienceType:aud.type, recipientCount:recipients.length});
   persist();
   return a;
 }
@@ -799,14 +921,58 @@ function migrateV5toV6(parsed){
   parsed.meta.version = 6;
   return parsed;
 }
+// Migration v6 -> v7: adds users.jobTitle/titleNeedsReview (PART 1 — official job titles) and
+// announcements.audience (PART 2 — recipient targeting). Additive-only and in-place, same
+// guarantee as v5->v6: every existing user and announcement is kept exactly as-is, only the new
+// fields are filled in with a value equivalent to their actual prior behavior.
+//   - Users: role is mapped to the matching official title wherever that mapping is unambiguous
+//     (teamleader/manager/director/headofsales/ceo); role:'salesperson' accounts get a default
+//     (alternating Junior/Senior Sales, deterministic by id so a given saved user always lands
+//     on the same default) and are flagged titleNeedsReview so an admin confirms/corrects via
+//     the Admin > Title review screen, never silently treated as final — identical policy to
+//     buildUsers() above for brand-new demo data. Admin-only accounts (junior/senior/head admin)
+//     and Head of HR are left with jobTitle:null (they hold no sales job title).
+//   - Announcements: every announcement sent before this round WAS, in fact, sent to all
+//     employees (the only behavior that existed), so audience:{type:'everyone'} here is not a
+//     guess — it is the historically accurate record of what already happened.
+function migrateTitlesV6toV7(parsed){
+  (parsed.users||[]).forEach(u=>{
+    if('jobTitle' in u) return; // already migrated
+    if(u.role==='ceo') { u.jobTitle='CEO'; u.titleNeedsReview=false; }
+    else if(u.role==='headofsales') { u.jobTitle='Head of Sales'; u.titleNeedsReview=false; }
+    else if(u.role==='director') { u.jobTitle='Director'; u.titleNeedsReview=false; }
+    else if(u.role==='manager') { u.jobTitle='Sales Manager'; u.titleNeedsReview=false; }
+    else if(u.role==='teamleader') { u.jobTitle='Team Leader'; u.titleNeedsReview=false; }
+    else if(u.role==='salesperson'){
+      // deterministic alternation by id so this default is stable across repeated migrations
+      let h=0; for(const c of u.id) h=(h*31+c.charCodeAt(0))>>>0;
+      u.jobTitle = (h%2===0) ? 'Junior Sales' : 'Senior Sales';
+      u.titleNeedsReview = true;
+    } else {
+      u.jobTitle = null; u.titleNeedsReview = false; // admin / Head of HR accounts
+    }
+  });
+  (parsed.announcements||[]).forEach(a=>{
+    if(!('audience' in a)) a.audience = {type:'everyone'};
+    if(!('recipientCount' in a)) a.recipientCount = (parsed.users||[]).filter(u=>u.id!==a.byId).length;
+  });
+  parsed.meta.version = 7;
+  return parsed;
+}
 function loadDB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw){
       const parsed = JSON.parse(raw);
-      if(parsed && parsed.meta && parsed.meta.version===6) return parsed;
+      if(parsed && parsed.meta && parsed.meta.version===7) return parsed;
+      if(parsed && parsed.meta && parsed.meta.version===6){
+        const migrated = migrateTitlesV6toV7(parsed);
+        saveDB(migrated);
+        return migrated;
+      }
       if(parsed && parsed.meta && parsed.meta.version===5){
-        const migrated = migrateV5toV6(parsed);
+        const migratedV6 = migrateV5toV6(parsed);
+        const migrated = migrateTitlesV6toV7(migratedV6);
         saveDB(migrated);
         return migrated;
       }
