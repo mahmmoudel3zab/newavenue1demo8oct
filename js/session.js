@@ -1,7 +1,13 @@
 /* =========================================================
    Session & routing
    ========================================================= */
-let session = { userId: sessionStorage.getItem('na1_user') || null, page: 'dashboard', tab:{}, activeTeamView:null, requestsFilter:'all',
+// A stored na1_user id is only honored if a real backend session (JWT) is also present —
+// otherwise a leftover/forged sessionStorage value could reach the app without ever having
+// passed real authentication. See api.js (token storage) and setAuthenticatedUser() below.
+const _storedUserId = sessionStorage.getItem('na1_user') || null;
+const _hasToken = (typeof NA1_API !== 'undefined') && NA1_API.isLoggedIn();
+if(_storedUserId && !_hasToken){ sessionStorage.removeItem('na1_user'); }
+let session = { userId: (_storedUserId && _hasToken) ? _storedUserId : null, page: 'dashboard', tab:{}, activeTeamView:null, requestsFilter:'all',
   invFilters:{bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[], dpMin:'',dpMax:'', totalMin:'',totalMax:''},
   invSort:'popularity', invSearch:'', simToday:null };
 function blankInvFilters(){ return {bedrooms:[],bathrooms:[],unitType:[],finishing:[],saleRent:[],delivery:[], dpMin:'',dpMax:'', totalMin:'',totalMax:''}; }
@@ -13,8 +19,48 @@ function blankInvFilters(){ return {bedrooms:[],bathrooms:[],unitType:[],finishi
 function effectiveTodayStr(){ return session.simToday || todayStr(); }
 
 function currentUser(){ return DB.users.find(u=>u.id===session.userId); }
+// setUser(id) is kept ONLY for the test/demo harnesses and any legacy call sites — real login
+// now goes through setAuthenticatedUser() below, which is the only path that stores a verified
+// backend session. Direct setUser() calls no longer happen from the login screen.
 function setUser(id){ session.userId = id; sessionStorage.setItem('na1_user', id); session.page='dashboard'; render(); }
-function logout(){ session.userId=null; sessionStorage.removeItem('na1_user'); render(); }
+// Called after a successful NA1_API.login() call. `backendUser` is the safe user object the
+// backend returned (id/name/role/team/... with no password hash). The frontend's own DB.users
+// (still the local prototype dataset while the full data-layer rewire is in progress — see
+// api.js's header comment and the project README) is matched by id so every existing page keeps
+// working unmodified; if a backend account has no matching local record this fails loudly rather
+// than silently logging in as nobody.
+async function setAuthenticatedUser(backendUser){
+  // The user directory is served by the backend; load it before resolving the signed-in user.
+  if(typeof hydrateUsersFromServer === 'function'){
+    const ok = await hydrateUsersFromServer();
+    if(!ok){ NA1_API.logout(); throw new Error('Signed in, but the user directory could not be loaded from the server. Please try again.'); }
+  }
+  const local = DB.users.find(u=>u.id===backendUser.id);
+  if(!local){
+    throw new Error('Signed in as ' + backendUser.email + ' but no matching local profile was found (id "' + backendUser.id + '"). This demo account is not yet mirrored in the frontend dataset.');
+  }
+  session.userId = local.id;
+  sessionStorage.setItem('na1_user', local.id);
+  session.page = 'dashboard';
+  // Owners (and the units they can link to) now come from the real backend — see js/sync.js.
+  // This is awaited before the first render so the Owners page never flashes stale/empty data.
+  if(typeof hydrateSessionData === 'function'){
+    await hydrateSessionData(local);
+  }
+  render();
+}
+function logout(){
+  session.userId=null;
+  sessionStorage.removeItem('na1_user');
+  if(typeof NA1_API !== 'undefined') NA1_API.logout();
+  // Drop everything the previous account loaded from the server (incl. the admin-only directory
+  // fields such as emails) so the next sign-in on this device starts clean.
+  if(typeof stopRequestsPolling === 'function') stopRequestsPolling();
+  resetServerOwned();
+  if(typeof clearPhotoCache === 'function') clearPhotoCache();
+  DB.users = buildUsers(); DB._usersHydrated = false;
+  render();
+}
 function go(page){ session.page = page; render(); window.scrollTo(0,0); }
 
 function toast(msg){
@@ -87,25 +133,22 @@ function teamOwners(u){
 function myUnits(u){ return DB.units.filter(x=>x.ownerSalespersonId===u.id && !x.deletedAt); }
 function teamUnits(u){ const down = new Set(downlineIds(u)); return DB.units.filter(x=>down.has(x.ownerSalespersonId) && !x.deletedAt); }
 // ownerExpiryState takes a raw timestamp (an Owner<->Unit relationship's lastUpdateAt) —
-// this is the relationship-level 30-day cycle, using the same 25/30-day soon/expired rule
+// this is the relationship-level 30-day cycle, soon = 28+ days (2-day reminder), expired = 30+ days
 // that previously applied to the whole owner.
 function ownerExpiryState(lastUpdateAt){
   const d = daysBetween(lastUpdateAt);
   if(d>=30) return 'expired';
-  if(d>=25) return 'soon';
+  if(d>=28) return 'soon';
   return 'ok';
 }
 function unreadCountFor(u){
   const tk = myTeamKey(u);
-  const list = requestsFor(tk);
-  const pos = DB.readPositions[u.id];
-  if(!pos) return list.length;
-  const idx = list.findIndex(r=>r.id===pos);
-  return idx===-1 ? list.length : (list.length-1-idx);
+  // Exact count computed by the server over the whole feed (the page only holds the latest window).
+  return DB.requestUnread[tk] || 0;
 }
 function freshLeadsFor(u){ return visibleLeads(u).filter(l=>l.fresh); }
 function myNotifications(u){ return DB.notifications.filter(n=>n.userId===u.id); }
-function unreadNotifCount(u){ return myNotifications(u).filter(n=>!n.read).length; }
+function unreadNotifCount(u){ return DB.notifUnread || 0; } // exact count from the server
 
 /* =========================================================
    Modal helper

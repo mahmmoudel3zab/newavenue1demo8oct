@@ -75,14 +75,20 @@ function openEditRefModal(refId, u){
   </div><div class="modal-foot"><button class="btn btn-primary" id="saveRefBtn">Save</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
   ['rf_phone','rf_wa'].forEach(id=> document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); }));
-  document.getElementById('saveRefBtn').addEventListener('click', ()=>{
+  document.getElementById('saveRefBtn').addEventListener('click', async ()=>{
     const phone = document.getElementById('rf_phone').value.trim();
     const wa = document.getElementById('rf_wa').value.trim();
     if(!isDigitsOnly(phone) || !normalizeEgyptPhone(phone)){ toast('Enter a valid phone number (digits only)'); return; }
     if(!isDigitsOnly(wa) || !normalizeEgyptPhone(wa)){ toast('Enter a valid WhatsApp number (digits only)'); return; }
-    r.phone = phoneLocalDisplay(normalizeEgyptPhone(phone));
-    r.whatsapp = phoneLocalDisplay(normalizeEgyptPhone(wa));
-    log(u.id,'reference_contact_edited',{refId:r.id});
-    persist(); closeModal(); toast('Contact details updated'); renderPageInto(u);
+    const btn = document.getElementById('saveRefBtn'); btn.disabled = true;
+    try{
+      // Saved on the server (it re-validates and checks that you may edit this person), then re-fetched.
+      await saveReferenceOnServer(r.userId, { phone: phoneLocalDisplay(normalizeEgyptPhone(phone)), whatsapp: phoneLocalDisplay(normalizeEgyptPhone(wa)) });
+    }catch(e){
+      btn.disabled = false;
+      toast(e && e.isNetworkError ? 'Could not reach the server — contact details were NOT saved.' : ((e && e.message) || 'Could not save contact details'));
+      return;
+    }
+    closeModal(); toast('Contact details updated'); renderPageInto(u);
   });
 }

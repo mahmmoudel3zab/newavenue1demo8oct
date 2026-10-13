@@ -3,104 +3,124 @@
    ========================================================= */
 function renderDashboard(u){
   const teamKey = myTeamKey(u);
-  const units = visibleUnits(u).slice().sort((a,b)=>popularityScore(b)-popularityScore(a)).slice(0,3);
+  const allUnits = visibleUnits(u);
+  const units = allUnits.slice().sort((a,b)=>popularityScore(b)-popularityScore(a)).slice(0,4);
   const reqList = requestsFor(teamKey);
   const unread = unreadCountFor(u);
   const recentReq = reqList.slice(-3).reverse();
+  const envLabel = teamKey[0].toUpperCase()+teamKey.slice(1);
 
-  let banner;
+  // Inventory at a glance — counts read from the same visible inventory the News Feed shows.
+  const weekAgo = Date.now() - 7*86400000;
+  const newThisWeek = allUnits.filter(x=>x.createdAt && x.createdAt>=weekAgo).length;
+  const immediate = allUnits.filter(x=>x.deliveryYears===0).length;
+  const pendingCount = allUnits.filter(x=>x.pending).length;
+  const kpis = `<div class="dash-kpis">
+    <div class="card dash-kpi"><b>${allUnits.length.toLocaleString('en-US')}</b><span>Live units · ${esc(envLabel)}</span></div>
+    <div class="card dash-kpi"><b>${newThisWeek}</b><span>New this week</span></div>
+    <div class="card dash-kpi"><b>${immediate}</b><span>Immediate delivery</span></div>
+    <div class="card dash-kpi"><b>${pendingCount}</b><span>Pending admin review</span></div>
+  </div>`;
+
+  // "Your day" — the same Daily Report status the old banner showed, as a progress card.
+  let dayCard;
   if(isSalesActive(u)){
-    // Leads is Phase 2 / inactive, so the dashboard no longer leads with a fresh-lead alert.
-    // Instead it surfaces today's Daily Performance Report status, since that's the daily task.
     const ds = effectiveTodayStr();
     const launched = isOnOrAfterLaunch(ds);
     const st = launched ? personalReportStatus(u, ds) : null;
-    if(launched && st!=='completed'){
-      banner = `<div class="card card-pad" style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
-          <div style="width:42px;height:42px;border-radius:50%; background:var(--brand-tint); color:var(--brand-dark); display:flex;align-items:center;justify-content:center; flex-shrink:0;">${ic('calendar')}</div>
-          <div style="flex:1;">
-            <div style="font-weight:800; font-size:15px;">Today's Daily Report is ${st==='in_progress'?'in progress':'not started yet'}</div>
-            <div style="font-size:12.5px; color:var(--text-muted);">${isMgmt(u)?'Just two quick fields — your comments and activities for today.':'Keep your calls, showings and meetings up to date — it only takes a few seconds.'}</div>
-          </div>
-          <button class="btn btn-primary" data-nav="reports">Open Daily Report</button>
-        </div>`;
+    if(launched && !isMgmt(u)){
+      const r = getDailyReport(u.id, ds);
+      const secs = (typeof REPORT_SECTIONS!=='undefined') ? REPORT_SECTIONS : [];
+      let filled = 0, total = 0;
+      const segs = secs.map(sec=>{
+        const n = sec.fields.filter(([k])=> r && r[sec.key] && r[sec.key][k]!==null && r[sec.key][k]!==undefined).length;
+        filled += n; total += sec.fields.length;
+        return `<i class="${n===sec.fields.length?'on':''}"></i>`;
+      }).join('');
+      const labels = secs.map(sec=>`<span>${esc(sec.title.split(' ')[0])}</span>`).join('');
+      dayCard = `<div class="card day-card">
+        <div class="card-head"><h3>Your Daily Report</h3>${st==='completed'?'<span class="badge badge-success">Completed</span>':st==='in_progress'?'<span class="badge badge-pending">In progress</span>':'<span class="badge badge-fresh">Not started</span>'}</div>
+        <div class="day-body">
+          <div class="day-big"><b>${filled}</b><span>/ ${total} fields</span></div>
+          <div class="seg-bar">${segs}</div><div class="seg-labels">${labels}</div>
+          <button class="btn btn-primary" data-nav="reports" style="width:100%; justify-content:center; margin-top:16px;">${st==='completed'?'View report':'Open Daily Report'}</button>
+        </div></div>`;
     } else if(launched){
-      banner = `<div class="card card-pad" style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
-          <div style="width:42px;height:42px;border-radius:50%; background:var(--success-tint); color:var(--success); display:flex;align-items:center;justify-content:center; flex-shrink:0;">${ic('check')}</div>
-          <div><div style="font-weight:700; font-size:14px;">Today's Daily Report is completed</div><div style="font-size:12.5px; color:var(--text-faint);">Nice work — you can still update it any time today.</div></div>
-          <button class="btn btn-ghost btn-sm" data-nav="reports" style="margin-left:auto;">View</button>
-        </div>`;
+      dayCard = `<div class="card day-card">
+        <div class="card-head"><h3>Your Daily Report</h3>${st==='completed'?'<span class="badge badge-success">Submitted</span>':'<span class="badge badge-pending">Draft</span>'}</div>
+        <div class="day-body"><p style="margin:0 0 14px; color:var(--text-muted); font-size:13px;">Just two quick fields — your comments and activities for today.</p>
+          <button class="btn btn-primary" data-nav="reports" style="width:100%; justify-content:center;">${st==='completed'?'View report':'Open Daily Report'}</button></div></div>`;
     } else {
-      banner = `<div class="card card-pad" style="margin-bottom:18px;">
-        <div class="section-title">Welcome back, ${esc(u.name.split(' ')[0])}</div>
-        <div class="section-sub">${esc(displayTitle(u))}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
-      </div>`;
+      dayCard = `<div class="card day-card"><div class="card-head"><h3>Daily Reports</h3><span class="badge badge-muted">Opens ${esc(DAILY_REPORT_LAUNCH_DATE)}</span></div>
+        <div class="day-body"><p style="margin:0; color:var(--text-muted); font-size:13px;">Welcome back, ${esc(u.name.split(' ')[0])}. Daily Performance Reports start on ${esc(DAILY_REPORT_LAUNCH_DATE)}.</p></div></div>`;
     }
   } else {
-    banner = `<div class="card card-pad" style="margin-bottom:18px;">
-      <div class="section-title">Welcome back, ${esc(u.name.split(' ')[0])}</div>
-      <div class="section-sub">${esc(displayTitle(u))}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div>
-    </div>`;
+    dayCard = `<div class="card welcome-card"><div class="section-title">Welcome back, ${esc(u.name.split(' ')[0])}</div>
+      <div class="section-sub" style="margin-bottom:0;">${esc(displayTitle(u))}${u.team? ' · '+u.team[0].toUpperCase()+u.team.slice(1):' · Company-wide'}</div></div>`;
   }
 
-  const newsCard = `<div class="card card-pad">
-    <div style="display:flex; align-items:center; margin-bottom:2px;"><div class="section-title">News Feed</div></div>
-    <div class="section-sub">Sorted by popularity</div>
+  const newsCard = `<div class="card">
+    <div class="card-head"><h3>Popular in the News Feed</h3><button class="link" data-nav="inventory">See all ${allUnits.length.toLocaleString('en-US')} ${ic('chevron')}</button></div>
     ${units.length? units.map(un=>unitMiniRow(un)).join('') : emptyRow('No inventory yet')}
-    <button class="btn btn-ghost btn-sm" data-nav="inventory" style="margin-top:10px; width:100%; justify-content:center;">Open News Feed ${ic('chevron')}</button>
   </div>`;
 
   const referencesCard = renderDashboardReferencesCard(u, teamKey);
 
-  const reqCard = `<div class="card card-pad">
-    <div style="display:flex; align-items:center; gap:8px;"><div class="section-title">Requests</div>${unread>0?`<span class="badge badge-fresh">${unread} new</span>`:''}</div>
-    <div class="section-sub">${teamKey[0].toUpperCase()+teamKey.slice(1)} team feed</div>
+  const reqCard = `<div class="card">
+    <div class="card-head"><h3>Requests</h3>${unread>0?`<span class="badge badge-brand">${unread} new</span>`:`<small>${esc(envLabel)} team</small>`}</div>
     ${recentReq.length? recentReq.map(r=>{
       const a = DB.users.find(x=>x.id===r.authorId);
-      return `<div style="padding:8px 0; border-top:1px solid var(--border);"><div style="font-size:12px; font-weight:700;">${esc(a?a.name:'?')}</div><div style="font-size:12px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(r.text)}</div></div>`;
+      return `<div class="req-row"><div class="rr-w"><b>${esc(a?a.name:'?')}</b></div><p>${esc(r.text)}</p></div>`;
     }).join('') : emptyRow('No requests yet')}
-    <button class="btn btn-ghost btn-sm" data-nav="requests" style="margin-top:10px; width:100%; justify-content:center;">Open Requests ${ic('chevron')}</button>
+    <div class="card-foot"><button class="btn btn-sm" data-nav="requests" style="width:100%; justify-content:center;">Open Requests ${ic('chevron')}</button></div>
   </div>`;
 
-  let mgmtBlock = '';
+  let teamCard = '';
   if(isMgmt(u)){
     const downIds = getDownlineIds(DB.users, u.id);
-    // Includes EVERY sales-active downline member — plain salespeople AND any management role
-    // below this user (e.g. a Sales Manager's team overview includes their Team Leaders too,
-    // since a Team Leader is also personally sales-active) — never just literal salespeople.
+    // Includes EVERY sales-active downline member — plain salespeople AND any management role below.
     const downUsers = DB.users.filter(x=>downIds.includes(x.id) && isSalesActive(x));
-    mgmtBlock = `<div class="card card-pad" style="margin-top:18px;">
-      <div class="section-title">Team overview</div>
-      <div class="section-sub">Visibility into everyone below you in the hierarchy — separate from your own personal activity above</div>
-      <table><thead><tr><th>Team member</th><th>Role</th><th>Today's report</th><th>Units</th><th>Owners</th></tr></thead><tbody>
-      ${downUsers.length ? downUsers.map(su=>{
-        const sun = DB.units.filter(x=>x.ownerSalespersonId===su.id && !x.deletedAt).length;
-        const so = distinctOwnerCountForSalesperson(su.id);
-        const ds = effectiveTodayStr();
-        const st = isOnOrAfterLaunch(ds) ? personalReportStatus(su, ds) : 'n/a';
-        const stBadge = st==='completed' ? '<span class="badge badge-success">Completed</span>' : st==='in_progress' ? '<span class="badge badge-pending">In progress</span>' : st==='missing' ? '<span class="badge badge-fresh">Missing</span>' : '<span class="badge badge-muted">—</span>';
-        return `<tr><td style="font-weight:700;">${esc(su.name)}</td><td>${esc(displayTitle(su))}</td><td>${stBadge}</td><td>${sun}</td><td>${so} / 30</td></tr>`;
-      }).join('') : emptyRow('No team members yet.')}
-      </tbody></table>
+    const ds = effectiveTodayStr();
+    const launched = isOnOrAfterLaunch(ds);
+    let done=0, prog=0, miss=0;
+    const rows = downUsers.map(su=>{
+      const sun = DB.units.filter(x=>x.ownerSalespersonId===su.id && !x.deletedAt).length;
+      const so = distinctOwnerCountForSalesperson(su.id);
+      const st = launched ? personalReportStatus(su, ds) : 'n/a';
+      if(st==='completed') done++; else if(st==='in_progress') prog++; else if(st==='missing') miss++;
+      const stBadge = st==='completed' ? '<span class="badge badge-success">Completed</span>' : st==='in_progress' ? '<span class="badge badge-pending">In progress</span>' : st==='missing' ? '<span class="badge badge-fresh">Missing</span>' : '<span class="badge badge-muted">—</span>';
+      return `<div class="list-row"><span class="avatar" style="background:${su.avatar}; width:34px; height:34px; font-size:11.5px;">${initials(su.name)}</span>
+        <div class="lr-t"><b>${esc(su.name)}</b><small>${esc(displayTitle(su))} · ${sun} units · ${so}/30 owners</small></div>${stBadge}</div>`;
+    }).join('');
+    const tot = Math.max(1, done+prog+miss);
+    teamCard = `<div class="card">
+      <div class="card-head"><h3>Team today</h3><small>${downUsers.length} below you</small></div>
+      ${downUsers.length ? rows : emptyRow('No team members yet.')}
+      ${launched && downUsers.length ? `<div class="stack-bar"><span style="flex:${done};background:var(--success)"></span><span style="flex:${prog};background:#E0A848"></span><span style="flex:${miss};background:var(--danger)"></span>${(done+prog+miss)===0?'<span style="flex:1;background:var(--surface-3)"></span>':''}</div>
+      <div class="stack-legend"><span>${done} completed</span><span>${prog} in progress</span><span>${miss} missing</span></div>` : ''}
     </div>`;
   }
 
-  let adminBlock = '';
+  let adminCard = '';
   if(isAdmin(u)){
     const pendingUnits = DB.units.filter(x=>x.pending && !x.deletedAt).length;
     const pendingTransfers = DB.transfers.filter(t=>t.status==='pending').length;
-    adminBlock = `<div class="card card-pad" style="margin-top:18px;">
-      <div class="section-title">Admin queue</div>
-      <div class="section-sub">Items needing administrative review</div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap;">
-        <div class="card card-pad" style="flex:1; min-width:180px;"><div style="font-size:26px; font-weight:800; font-family:var(--font-head);">${pendingUnits}</div><div style="font-size:12px; color:var(--text-faint);">Units pending review</div></div>
-        <div class="card card-pad" style="flex:1; min-width:180px;"><div style="font-size:26px; font-weight:800; font-family:var(--font-head);">${pendingTransfers}</div><div style="font-size:12px; color:var(--text-faint);">Owner transfer requests</div></div>
+    adminCard = `<div class="card">
+      <div class="card-head"><h3>Admin queue</h3><small>Needs review</small></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:4px 20px 6px;">
+        <div class="dash-kpi" style="background:var(--surface-2); border-radius:14px;"><b>${pendingUnits}</b><span>Units pending review</span></div>
+        <div class="dash-kpi" style="background:var(--surface-2); border-radius:14px;"><b>${pendingTransfers}</b><span>Owner transfer requests</span></div>
       </div>
-      <button class="btn btn-primary btn-sm" data-nav="admin" style="margin-top:12px;">Go to Admin panel</button>
+      <div class="card-foot" style="border:0;"><button class="btn btn-primary btn-sm" data-nav="admin" style="width:100%; justify-content:center;">Go to Admin panel</button></div>
     </div>`;
   }
 
-  return `${banner}<div class="grid-3">${newsCard}${referencesCard}${reqCard}</div>${mgmtBlock}${adminBlock}`;
+  const third = (teamCard || adminCard) ? `<div class="dash-col">${teamCard}${adminCard}</div>` : '';
+  return `${kpis}<div class="dash-grid${third?'':' two'}">
+    <div class="dash-col">${dayCard}${reqCard}</div>
+    <div class="dash-col">${newsCard}${referencesCard}</div>
+    ${third}
+  </div>`;
 }
 
 /* =========================================================
@@ -120,39 +140,31 @@ function renderDashboardReferencesCard(u, teamKey){
   if(q) list = list.filter(({r,person})=> person.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q));
   list = list.slice().sort((a,b)=>a.person.name.localeCompare(b.person.name));
   const shown = list.slice(0,4);
-  return `<div class="card card-pad">
-    <div class="section-title">References</div>
-    <div class="section-sub">${teamKey[0].toUpperCase()+teamKey.slice(1)} team directory — search a colleague to call or message</div>
-    <div class="search-field" style="margin-bottom:10px;">
+  return `<div class="card">
+    <div class="card-head"><h3>Reference</h3><button class="link" data-nav="reference">Full directory ${ic('chevron')}</button></div>
+    <div class="search-field" style="margin:0 20px 10px;">
       ${ic('search')}<input id="dashRefSearch" placeholder="Search by name or reference code…" value="${esc(session._dashRefSearch||'')}">
     </div>
     ${shown.length? shown.map(({r,person})=>dashboardRefRow(r,person)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
-    ${list.length>shown.length ? `<div style="font-size:11px; color:var(--text-faint); margin-top:4px;">+${list.length-shown.length} more in the full directory</div>` : ''}
-    <button class="btn btn-ghost btn-sm" data-nav="reference" style="margin-top:10px; width:100%; justify-content:center;">Open full directory ${ic('chevron')}</button>
+    ${list.length>shown.length ? `<div style="font-size:12px; color:var(--text-faint); padding:8px 20px 14px;">+${list.length-shown.length} more in the full directory</div>` : '<div style="height:6px"></div>'}
   </div>`;
 }
 function dashboardRefRow(r,person){
-  return `<div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid var(--border);">
-    <span class="avatar" style="background:${avatarColor(person.name)}; width:30px;height:30px; font-size:11px; flex-shrink:0;">${initials(person.name)}</span>
-    <div style="flex:1; min-width:0;">
-      <div style="font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(person.name)}</div>
-      <div style="font-size:11px; color:var(--text-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(displayTitle(person))}</div>
-    </div>
-    <a class="icon-btn" style="text-decoration:none;" href="${telHref(r.phone)}" title="Call ${esc(person.name)}">${ic('phone')}</a>
-    <a class="icon-btn" style="text-decoration:none;" href="${waHref(r.whatsapp)}" target="_blank" rel="noopener" title="WhatsApp ${esc(person.name)}">${ic('whatsapp')}</a>
+  return `<div class="list-row" style="padding:9px 20px;">
+    <span class="avatar" style="background:${avatarColor(person.name)}; width:34px;height:34px; font-size:11.5px;">${initials(person.name)}</span>
+    <div class="lr-t"><b>${esc(person.name)}</b><small>${esc(displayTitle(person))}${r.code?' · '+esc(r.code):''}</small></div>
+    <a class="mini-act dark" href="${telHref(r.phone)}" title="Call ${esc(person.name)}" aria-label="Call ${esc(person.name)}">${ic('phone')}</a>
+    <a class="mini-act" href="${waHref(r.whatsapp)}" target="_blank" rel="noopener" title="WhatsApp ${esc(person.name)}" aria-label="WhatsApp ${esc(person.name)}">${ic('whatsapp')}</a>
   </div>`;
 }
 function unitMiniRow(un){
-  return `<div class="unit-mini" data-unit="${un.id}" style="display:flex; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--border); cursor:pointer;">
-    <div style="width:44px;height:34px;border-radius:6px; background:linear-gradient(135deg,var(--surface-3),var(--brand-tint)); flex-shrink:0;"></div>
-    <div style="flex:1; min-width:0;">
-      <div style="font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(un.compound)} · ${esc(un.unitType)}</div>
-      <div style="font-size:11.5px; color:var(--text-faint);">${fmtMoney(un.totalPrice)}</div>
-    </div>
-    ${un.pending?'<span class="badge badge-pending">Pending</span>':''}
+  return `<div class="unit-mini list-row" data-unit="${un.id}">
+    <div class="scrim-photo">${(un.photoIds&&un.photoIds.length)?`<img data-photo-id="${un.photoIds[0]}" data-photo-size="thumb" alt="">`:''}</div>
+    <div class="lr-t"><b>${esc(un.compound)}</b><small>${esc(un.unitType)} · ${esc(un.area)}${un.pending?' · Pending review':''}</small></div>
+    <div class="lr-p">${fmtMoney(un.totalPrice)}<small>DP ${fmtMoney(un.downPayment)}</small></div>
   </div>`;
 }
-function emptyRow(text){ return `<div style="padding:14px 0; font-size:12.5px; color:var(--text-faint); text-align:center;">${text}</div>`; }
+function emptyRow(text){ return `<div style="padding:16px 20px; font-size:12.5px; color:var(--text-faint); text-align:center;">${text}</div>`; }
 AFTER_RENDER.dashboard = function(u){
   document.querySelectorAll('.unit-mini').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
   document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=> go(b.dataset.nav)));

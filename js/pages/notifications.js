@@ -13,17 +13,17 @@ function renderNotificationsPage(u){
   </div>`;
 }
 AFTER_RENDER.notifications = function(u){
-  document.querySelectorAll('[data-readnotif]').forEach(b=> b.addEventListener('click', (e)=>{
+  // Read state lives on the server: mark it there first, then update the screen.
+  document.querySelectorAll('[data-readnotif]').forEach(b=> b.addEventListener('click', async (e)=>{
     e.stopPropagation();
-    const n = DB.notifications.find(x=>x.id===b.dataset.readnotif); n.read=true; persist(); renderPageInto(u);
+    if(await markNotificationReadOnServer(b.dataset.readnotif)) renderPageInto(u);
   }));
-  document.querySelectorAll('.notif-row').forEach(el=> el.addEventListener('click', ()=>{
+  document.querySelectorAll('.notif-row').forEach(el=> el.addEventListener('click', async ()=>{
     const n = DB.notifications.find(x=>x.id===el.dataset.notif);
     if(!n) return;
-    n.read = true; persist();
+    if(!n.read) await markNotificationReadOnServer(n.id);
     if(n.meta && n.meta.date) session._reportDate = n.meta.date;
     if(n.meta && n.meta.announcementId) session._openAnnouncementId = n.meta.announcementId;
     if(n.link) go(n.link); else renderPageInto(u);
   }));
 };
-

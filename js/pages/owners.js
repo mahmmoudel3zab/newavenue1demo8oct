@@ -21,7 +21,11 @@ function renderOwnersPage(u){
   const teamList = mgmt ? teamOwners(u).filter(o=>o.team===tk) : (!salesActive ? visibleOwners(u) : []);
   const list = scope==='my' ? myList : teamList;
   const ownerCount = myList.length;
-  const atCap = salesActive && ownerCount>=30;
+  // The cap is admin-configurable server-side (default 30 — see na1-backend routes/admin.js
+  // PATCH /settings/owner-cap); DB.ownerCap is set from GET /api/owners/cap during hydration
+  // (js/sync.js), with 30 as a safe fallback if it hasn't loaded yet for any reason.
+  const cap = DB.ownerCap || 30;
+  const atCap = salesActive && ownerCount>=cap;
 
   // Available Pool (self-service browsing/claiming of expired relationships) is Head-Admin-only
   // as of Part 4 of this round — it no longer appears anywhere on the normal salesperson Owners
@@ -37,11 +41,11 @@ function renderOwnersPage(u){
   ${scopeTabs}
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:10px; flex-wrap:wrap;">
     <div class="section-sub" style="margin-bottom:0;">
-      ${salesActive && scope==='my' ? `${ownerCount} / 30 active owners` : `${list.length} owner${list.length===1?'':'s'}${scope==='team'?' across your team':''}`}
+      ${salesActive && scope==='my' ? `${ownerCount} / ${cap} active owners` : `${list.length} owner${list.length===1?'':'s'}${scope==='team'?' across your team':''}`}
     </div>
-    ${salesActive && scope==='my' ? `<button class="btn btn-primary btn-sm" id="addOwnerBtn" ${atCap?'disabled title="Remove an owner first — 30 active owner limit reached"':''}>${ic('plus')} Add owner</button>` : ''}
+    ${salesActive && scope==='my' ? `<button class="btn btn-primary btn-sm" id="addOwnerBtn" ${atCap?'disabled title="Remove an owner first — active owner limit reached"':''}>${ic('plus')} Add owner</button>` : ''}
   </div>
-  ${atCap?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12.5px; color:var(--warning);">You're at the 30 active owner limit. Remove an existing owner (end all of their relationships) before adding a new one.</div>`:''}
+  ${atCap?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12.5px; color:var(--warning);">You're at the ${cap} active owner limit. Remove an existing owner (end all of their relationships) before adding a new one.</div>`:''}
   <div class="card" style="margin-bottom:18px;">
     ${list.length? list.map(o=>ownerCard(o,u,scope)).join('') : emptyRow(scope==='my' ? 'No owners yet — click "Add owner" to create your first one.' : 'No team owners yet.')}
   </div>
@@ -100,7 +104,7 @@ AFTER_RENDER.owners = function(u){
   }));
   document.querySelectorAll('[data-addunit]').forEach(b=> b.addEventListener('click', ()=> openAddUnitToOwnerModal(b.dataset.addunit, u)));
   document.querySelectorAll('[data-editowner]').forEach(b=> b.addEventListener('click', ()=> openEditOwnerModal(b.dataset.editowner, u)));
-  document.querySelectorAll('[data-deleteowner]').forEach(b=> b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-deleteowner]').forEach(b=> b.addEventListener('click', async ()=>{
     const owner = DB.owners.find(x=>x.id===b.dataset.deleteowner);
     if(!owner) return;
     if(!salespersonHasOwner(u.id, owner.id)){ toast('You can only delete an owner that belongs to your own account'); return; }
@@ -111,9 +115,11 @@ AFTER_RENDER.owners = function(u){
       `Only a Head Admin can restore a removed owner.`
     );
     if(!ok) return;
-    softDeleteOwner(owner, u.id);
-    log(u.id,'owner_soft_deleted',{ownerId:owner.id});
-    persist(); toast('Owner removed from your list'); session._expandedOwner=null; renderPageInto(u);
+    try {
+      await NA1_API.del('/owners/'+owner.id);
+    } catch(e){ toast((e&&e.message)||'Could not remove this owner — please try again'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast('Owner removed from your list'); session._expandedOwner=null; renderPageInto(u);
   }));
   const ab = document.getElementById('addOwnerBtn'); if(ab) ab.addEventListener('click', ()=> openAddOwnerModal(u));
 };
@@ -135,8 +141,10 @@ function openUpdateOwnerModal(ownerId, u, step, relId){
         <button class="btn" id="editUnitBtn" style="width:100%; justify-content:center;">${ic('edit')} Edit Unit — change the unit's information</button>
       </div>`);
     document.getElementById('modalCloseX').addEventListener('click', closeModal);
-    document.getElementById('autoUpdateBtn').addEventListener('click', ()=>{
-      refreshRelationship(rel, u, 'automatic');
+    document.getElementById('autoUpdateBtn').addEventListener('click', async ()=>{
+      try { await NA1_API.post('/owners/relationships/'+rel.id+'/automatic-update'); }
+      catch(e){ toast((e&&e.message)||'Could not update this relationship'); return; }
+      await hydrateOwnersAndUnitsFromServer(u);
       closeModal(); toast('Owner relationship updated'); renderPageInto(u);
     });
     document.getElementById('editUnitBtn').addEventListener('click', ()=> openUpdateOwnerModal(ownerId,u,'edit-unit',relId));
@@ -156,24 +164,20 @@ function openUpdateOwnerModal(ownerId, u, step, relId){
       </div>
       <div class="modal-foot"><button class="btn btn-primary" id="saveUnitEditBtn">Save & mark relationship updated</button></div>`);
     document.getElementById('modalCloseX').addEventListener('click', closeModal);
-    document.getElementById('saveUnitEditBtn').addEventListener('click', ()=>{
-      unit.compound = document.getElementById('eu_compound').value || unit.compound;
-      unit.developer = document.getElementById('eu_developer').value || unit.developer;
-      unit.totalPrice = Number(document.getElementById('eu_total').value)||unit.totalPrice;
-      unit.downPayment = Number(document.getElementById('eu_dp').value)||unit.downPayment;
-      unit.finishing = document.getElementById('eu_finishing').value;
-      refreshRelationship(rel, u, 'edit_unit');
-      log(u.id,'unit_edited_via_owner_update',{unitId:unit.id, ownerUnitId:rel.id});
+    document.getElementById('saveUnitEditBtn').addEventListener('click', async ()=>{
+      const body = {
+        compound: document.getElementById('eu_compound').value || unit.compound,
+        developer: document.getElementById('eu_developer').value || unit.developer,
+        totalPrice: Number(document.getElementById('eu_total').value)||unit.totalPrice,
+        downPayment: Number(document.getElementById('eu_dp').value)||unit.downPayment,
+        finishing: document.getElementById('eu_finishing').value,
+      };
+      try { await NA1_API.patch('/owners/relationships/'+rel.id+'/unit', body); }
+      catch(e){ toast((e&&e.message)||'Could not save this unit'); return; }
+      await hydrateOwnersAndUnitsFromServer(u);
       closeModal(); toast('Unit updated — relationship marked as updated'); renderPageInto(u);
     });
   }
-}
-function refreshRelationship(rel, u, mode){
-  rel.lastUpdateAt = now();
-  rel.nextUpdateAt = rel.lastUpdateAt + 30*86400000;
-  rel.reminderAt = rel.lastUpdateAt + 25*86400000;
-  log(u.id,'owner_unit_relationship_updated',{ownerUnitId:rel.id, mode});
-  persist();
 }
 
 /* ---------- Automatic duplicate-owner detection UI (Add Owner) ----------
@@ -228,30 +232,33 @@ function overridePanelHTML(){
 }
 function wireOwnerDupWarningEvents(u, tk, getNamePhones){
   const reqBtn = document.getElementById('dupRequestAccessBtn');
-  if(reqBtn) reqBtn.addEventListener('click', ()=>{
+  if(reqBtn) reqBtn.addEventListener('click', async ()=>{
     const ctx = session._addOwnerDupCtx;
     if(!ctx) return;
-    DB.transfers.push({id:uid('tr'), type:'claim', ownerUnitId:null, ownerId:ctx.ownerId, unitId:null, fromSalespersonId:ctx.holderId, toSalespersonId:u.id, status:'pending', at:now()});
-    log(u.id,'owner_claim_requested',{ownerId:ctx.ownerId});
-    persist(); closeModal(); toast('Claim sent for admin approval — that owner already exists with another salesperson'); renderPageInto(u);
+    reqBtn.disabled = true;
+    try {
+      await NA1_API.post('/owners/'+ctx.ownerId+'/claim-request', {});
+    } catch(e){ toast((e&&e.message)||'Could not send that request'); reqBtn.disabled = false; return; }
+    closeModal(); toast('Claim sent for admin approval — that owner already exists with another salesperson'); renderPageInto(u);
   });
   const ovBtn = document.getElementById('dupOverrideBtn');
   if(ovBtn) ovBtn.addEventListener('click', ()=>{
     const panel = document.getElementById('dupOverridePanel');
     if(panel) panel.innerHTML = overridePanelHTML();
     const confirmBtn = document.getElementById('dupOverrideConfirmBtn');
-    if(confirmBtn) confirmBtn.addEventListener('click', ()=>{
+    if(confirmBtn) confirmBtn.addEventListener('click', async ()=>{
       const ctx = session._addOwnerDupCtx;
       const reason = (document.getElementById('dupOverrideReason')||{}).value || '';
       if(!reason.trim()){ toast('A reason is required to create a separate record'); return; }
       if(!confirm('Create a separate Owner record with the same phone number as an existing Owner?\n\nReason: '+reason.trim()+'\n\nThis is an administrative exception — use it only when you are certain these are genuinely different owners.')) return;
-      const { name, canonical, canonical2 } = getNamePhones();
+      const { name, rawPhone, rawPhone2 } = getNamePhones();
       if(!name){ toast('Owner name is required'); return; }
-      if(!canonical){ toast('Enter a valid phone number'); return; }
-      const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), deletedAt:null, deletedBy:null, duplicateOverride:{of:ctx.ownerId, reason:reason.trim(), by:u.id, at:now()}};
-      DB.owners.push(owner);
-      log(u.id,'owner_added_duplicate_override',{ownerId:owner.id, matchedOwnerId:ctx.ownerId, reason:reason.trim()});
-      persist(); closeModal(); toast('Separate owner record created (administrative exception)'); session._expandedOwner=null; renderPageInto(u);
+      if(!rawPhone){ toast('Enter a valid phone number'); return; }
+      try {
+        await NA1_API.post('/owners', { name, phone: rawPhone, phone2: rawPhone2||undefined, overrideDuplicateReason: reason.trim() });
+      } catch(e){ toast((e&&e.message)||'Could not create that record'); return; }
+      await hydrateOwnersAndUnitsFromServer(u);
+      closeModal(); toast('Separate owner record created (administrative exception)'); session._expandedOwner=null; renderPageInto(u);
     });
   });
 }
@@ -280,19 +287,32 @@ function openAddOwnerModal(u){
     const name = document.getElementById('ow_name').value.trim();
     const rawPhone = document.getElementById('ow_phone').value.trim();
     const rawPhone2 = document.getElementById('ow_phone2').value.trim();
-    const canonical = isDigitsOnly(rawPhone) ? normalizeEgyptPhone(rawPhone) : null;
-    const canonical2 = rawPhone2 && isDigitsOnly(rawPhone2) ? normalizeEgyptPhone(rawPhone2) : null;
-    return { name, rawPhone, rawPhone2, canonical, canonical2 };
+    return { name, rawPhone, rawPhone2 };
   }
-  function runDupCheck(){
+  // Live duplicate check now calls the real backend (GET /owners/check-phone) instead of
+  // scanning a local array — this is the only way it can see owners held by OTHER
+  // salespeople, which were never visible to this user's own local cache to begin with.
+  let dupCheckSeq = 0;
+  async function runDupCheck(){
+    const seq = ++dupCheckSeq;
     const { rawPhone, rawPhone2 } = currentNamePhones();
-    const match = findDuplicateOwnerByRawPhone(rawPhone, tk) || findDuplicateOwnerByRawPhone(rawPhone2, tk);
-    const ctx = match ? ownerDuplicateContext(match, u) : null;
+    if(!rawPhone && !rawPhone2){
+      session._addOwnerDupCtx = null;
+      const box = document.getElementById('ow_dupWarning'); if(box) box.innerHTML = '';
+      const saveBtn = document.getElementById('saveOwnerBtn'); if(saveBtn) saveBtn.disabled = false;
+      return;
+    }
+    let ctx = null;
+    try {
+      const resp = await NA1_API.get('/owners/check-phone', { phone: rawPhone, phone2: rawPhone2 });
+      ctx = resp.match;
+    } catch(e){ /* network hiccup while typing — just skip this check, the save-time check still protects us */ }
+    if(seq !== dupCheckSeq) return; // a newer keystroke's check already landed — discard this stale result
     session._addOwnerDupCtx = ctx;
     const box = document.getElementById('ow_dupWarning');
     if(box){
       box.innerHTML = renderOwnerDupWarning(ctx, u);
-      wireOwnerDupWarningEvents(u, tk, ()=>{ const r = currentNamePhones(); return { name:r.name, canonical:r.canonical, canonical2:r.canonical2 }; });
+      wireOwnerDupWarningEvents(u, tk, currentNamePhones);
     }
     const saveBtn = document.getElementById('saveOwnerBtn');
     if(saveBtn) saveBtn.disabled = !!(ctx && ctx.heldByOthers);
@@ -301,42 +321,27 @@ function openAddOwnerModal(u){
     document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); runDupCheck(); });
   });
 
-  document.getElementById('saveOwnerBtn').addEventListener('click', ()=>{
+  document.getElementById('saveOwnerBtn').addEventListener('click', async (e)=>{
     const { name, rawPhone, rawPhone2 } = currentNamePhones();
     if(!name){ toast('Owner name is required'); return; }
     if(!isDigitsOnly(rawPhone)){ toast('Phone must contain digits only (no +, spaces, dashes or letters)'); return; }
-    const canonical = normalizeEgyptPhone(rawPhone);
-    if(!canonical){ toast('Enter a valid Egyptian local (01XXXXXXXXX) or international (20XXXXXXXXXXX) number'); return; }
-    let canonical2 = null;
-    if(rawPhone2){
-      if(!isDigitsOnly(rawPhone2)){ toast('Second phone must contain digits only'); return; }
-      canonical2 = normalizeEgyptPhone(rawPhone2);
-      if(!canonical2){ toast('Second phone is not a valid Egyptian number'); return; }
+    if(!normalizeEgyptPhone(rawPhone)){ toast('Enter a valid Egyptian local (01XXXXXXXXX) or international (20XXXXXXXXXXX) number'); return; }
+    if(rawPhone2 && !normalizeEgyptPhone(rawPhone2)){ toast('Second phone is not a valid Egyptian number'); return; }
+    const btn = e.currentTarget; btn.disabled = true;
+    let resp;
+    try {
+      resp = await NA1_API.post('/owners', { name, phone: rawPhone, phone2: rawPhone2||undefined });
+    } catch(err){
+      btn.disabled = false;
+      // The backend is the final, authoritative check (e.g. the owner cap or a brand-new
+      // duplicate that appeared between typing and clicking Save) — its message is shown as-is.
+      toast((err&&err.message)||'Could not save this owner'); return;
     }
-    const archived = findArchivedOwnerByCanonicalPhone(canonical, tk) || (canonical2 && findArchivedOwnerByCanonicalPhone(canonical2, tk));
-    if(archived){
-      toast('This phone number belongs to a removed (deleted) owner record. Ask a Head Admin to restore it before it can be used again.');
-      return;
-    }
-    const existing = findOwnerByCanonicalPhone(canonical, tk) || (canonical2 && findOwnerByCanonicalPhone(canonical2, tk));
-    if(existing && salespersonHasOwner(u.id, existing.id)){
-      closeModal(); toast('You already have this owner in your list'); session._expandedOwner=existing.id; renderPageInto(u);
-      return;
-    }
-    if(existing && ownerHeldByOthers(existing.id, u.id)){
-      // Don't silently duplicate the owner record — the live warning above already surfaced this
-      // and offers "Request access" / admin override; the plain Save button is a dead end here by
-      // design (also disabled by runDupCheck) so this only fires if that validation is bypassed.
-      toast('This owner already exists with another salesperson — use "Request access" above, or an admin override, instead of Save');
-      return;
-    }
-    if(distinctOwnerCountForSalesperson(u.id)>=30){
-      toast('You are at the 30 active owner limit — remove an owner before adding a new one'); return;
-    }
-    const owner = {id:uid('o'), team:tk, salespersonId:u.id, sharedWith:[], name, phone:canonical, phone2:canonical2, createdAt:now(), deletedAt:null, deletedBy:null};
-    DB.owners.push(owner);
-    log(u.id,'owner_added',{ownerId:owner.id});
-    persist(); closeModal(); toast('Owner added — link a unit whenever you’re ready'); session._expandedOwner=null; renderPageInto(u);
+    await hydrateOwnersAndUnitsFromServer(u);
+    closeModal();
+    toast(resp.outcome==='already_mine' ? 'You already have this owner in your list' : 'Owner added — link a unit whenever you’re ready');
+    session._expandedOwner = resp.owner ? resp.owner.id : null;
+    renderPageInto(u);
   });
 }
 
@@ -357,12 +362,15 @@ function openAddUnitToOwnerModal(ownerId, u){
     ${availableUnits.length ? `<div class="modal-foot"><button class="btn btn-primary" id="saveAddUnitBtn">Link unit</button></div>` : ''}`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
   const save = document.getElementById('saveAddUnitBtn');
-  if(save) save.addEventListener('click', ()=>{
+  if(save) save.addEventListener('click', async ()=>{
     const unitId = document.getElementById('au_unit').value;
     if(!unitId) return;
-    DB.ownerUnits.push(makeOwnerUnitRel(o.id, unitId, u.id, 0));
-    log(u.id,'owner_unit_added',{ownerId:o.id, unitId});
-    persist(); closeModal(); toast('Unit linked to owner'); session._expandedOwner=o.id; renderPageInto(u);
+    save.disabled = true;
+    try {
+      await NA1_API.post('/owners/'+o.id+'/units', { unitId });
+    } catch(e){ save.disabled = false; toast((e&&e.message)||'Could not link this unit'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    closeModal(); toast('Unit linked to owner'); session._expandedOwner=o.id; renderPageInto(u);
   });
 }
 
@@ -381,13 +389,19 @@ function openEditOwnerModal(ownerId, u){
     <div class="modal-foot"><button class="btn btn-primary" id="saveEditOwnerBtn">Save changes</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
 
-  function runEditDupCheck(){
+  let editDupSeq = 0;
+  async function runEditDupCheck(){
+    const seq = ++editDupSeq;
     const rawPhone = document.getElementById('eo_phone').value.trim();
     const rawPhone2 = document.getElementById('eo_phone2').value.trim();
-    const m1 = findDuplicateOwnerByRawPhone(rawPhone, o.team);
-    const m2 = findDuplicateOwnerByRawPhone(rawPhone2, o.team);
-    const match = (m1 && m1.id!==o.id) ? m1 : ((m2 && m2.id!==o.id) ? m2 : null);
-    const ctx = match ? ownerDuplicateContext(match, u) : null;
+    let ctx = null;
+    if(rawPhone || rawPhone2){
+      try {
+        const resp = await NA1_API.get('/owners/check-phone', { phone: rawPhone, phone2: rawPhone2, excludeOwnerId: o.id });
+        ctx = resp.match;
+      } catch(e){ /* skip on a transient network hiccup — save-time check still protects us */ }
+    }
+    if(seq !== editDupSeq) return;
     session._editOwnerDupCtx = ctx;
     const box = document.getElementById('eo_dupWarning');
     if(box) box.innerHTML = ctx ? renderOwnerDupWarning(ctx, u, {readOnly:true}) : '';
@@ -397,24 +411,19 @@ function openEditOwnerModal(ownerId, u){
   ['eo_phone','eo_phone2'].forEach(id=>{
     document.getElementById(id).addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); runEditDupCheck(); });
   });
-  document.getElementById('saveEditOwnerBtn').addEventListener('click', ()=>{
+  document.getElementById('saveEditOwnerBtn').addEventListener('click', async (e)=>{
     const name = document.getElementById('eo_name').value.trim();
     const rawPhone = document.getElementById('eo_phone').value.trim();
     const rawPhone2 = document.getElementById('eo_phone2').value.trim();
     if(!name){ toast('Owner name is required'); return; }
     if(!isDigitsOnly(rawPhone)){ toast('Phone must contain digits only'); return; }
-    const canonical = normalizeEgyptPhone(rawPhone);
-    if(!canonical){ toast('Enter a valid Egyptian local or international number'); return; }
-    let canonical2 = null;
-    if(rawPhone2){
-      if(!isDigitsOnly(rawPhone2)){ toast('Second phone must contain digits only'); return; }
-      canonical2 = normalizeEgyptPhone(rawPhone2);
-      if(!canonical2){ toast('Second phone is not a valid Egyptian number'); return; }
-    }
-    const clash = DB.owners.find(x=>x.id!==o.id && x.team===o.team && (x.phone===canonical || x.phone2===canonical || (canonical2 && (x.phone===canonical2 || x.phone2===canonical2))));
-    if(clash){ toast('That phone number already belongs to another owner ('+clash.name+')'); return; }
-    o.name = name; o.phone = canonical; o.phone2 = canonical2;
-    log(u.id,'owner_edited',{ownerId:o.id});
-    persist(); closeModal(); toast('Owner updated'); renderPageInto(u);
+    if(!normalizeEgyptPhone(rawPhone)){ toast('Enter a valid Egyptian local or international number'); return; }
+    if(rawPhone2 && !normalizeEgyptPhone(rawPhone2)){ toast('Second phone is not a valid Egyptian number'); return; }
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      await NA1_API.patch('/owners/'+o.id, { name, phone: rawPhone, phone2: rawPhone2||undefined });
+    } catch(err){ btn.disabled = false; toast((err&&err.message)||'Could not save changes'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    closeModal(); toast('Owner updated'); renderPageInto(u);
   });
 }

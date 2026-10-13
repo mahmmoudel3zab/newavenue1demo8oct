@@ -54,13 +54,21 @@ function renderDailyReportPage(u){
    (getOrCreateMgmtReport), stored in DB.mgmtReports — a completely separate collection from
    DB.dailyReports (the salesperson form), so it is never read by the Team Reports view below
    or mixed with a salesperson's report in any way. */
+// A report can only be filed for a date up to TODAY (Egypt time). The "preview using 2026-11-01"
+// test aid lets someone SEE the form before launch, but nothing can be saved for a future date —
+// the server refuses it — so in that mode the form is shown read-only with a clear notice instead
+// of silently pretending to save.
+function isFutureReportDate(ds){ return ds > todayStr(); }
+const PREVIEW_NOTICE = `<div class="card card-pad" style="margin-bottom:14px; border-left:3px solid var(--warning, #d98a00);"><div style="font-size:12.5px;"><b>Preview only.</b> This date is in the future (Egypt time), so nothing can be entered or saved yet. Reports open on ${DAILY_REPORT_LAUNCH_DATE}.</div></div>`;
 function renderSimpleMgmtView(u, ds){
   const today = effectiveTodayStr();
+  const preview = isFutureReportDate(ds);
   const report = getOrCreateMgmtReport(u.id, ds);
   const isToday = ds===today;
   const submitted = !!(report.comments.trim() && report.activities.trim());
   const history = mgmtReportsForUser(u.id).filter(r=> r.comments.trim() || r.activities.trim());
   return `
+  ${preview?PREVIEW_NOTICE:''}
   <div class="card card-pad" style="margin-bottom:16px;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:4px;">
       <div>
@@ -73,14 +81,14 @@ function renderSimpleMgmtView(u, ds){
   </div>
   <div class="card card-pad" style="margin-bottom:16px;">
     <div class="field"><label class="field-label">Daily Comments</label>
-      <textarea id="mr_comments" rows="3" placeholder="e.g. Followed up with the team regarding current inventory priorities.">${esc(report.comments)}</textarea>
+      <textarea id="mr_comments" rows="3" ${preview?'disabled':''} placeholder="e.g. Followed up with the team regarding current inventory priorities.">${esc(report.comments)}</textarea>
     </div>
     <div class="field" style="margin-bottom:0;"><label class="field-label">Daily Activities</label>
-      <textarea id="mr_activities" rows="4" placeholder="e.g. Reviewed 12 units, held a team meeting, and followed up on 5 important leads.">${esc(report.activities)}</textarea>
+      <textarea id="mr_activities" rows="4" ${preview?'disabled':''} placeholder="e.g. Reviewed 12 units, held a team meeting, and followed up on 5 important leads.">${esc(report.activities)}</textarea>
     </div>
   </div>
   <div style="display:flex; justify-content:flex-end; margin-bottom:22px;">
-    <button class="btn btn-primary" id="saveMgmtReportBtn">${ic('check')} ${submitted?'Update report':'Submit report'}</button>
+    <button class="btn btn-primary" id="saveMgmtReportBtn" ${preview?'disabled':''}>${ic('check')} ${submitted?'Update report':'Submit report'}</button>
   </div>
   <div class="section-title" style="font-size:14px; margin-bottom:2px;">Report history</div>
   <div class="section-sub">Your own past daily reports — never mixed with your team's.</div>
@@ -144,42 +152,53 @@ function renderTeamReportsView(u){
 
 function renderDailyView(u, ds){
   const today = effectiveTodayStr();
+  const preview = isFutureReportDate(ds);
   const report = getOrCreateDailyReport(u.id, ds);
   const complete = isReportComplete(report);
   const statusBadge = report.status==='completed'
     ? '<span class="badge badge-success">Completed</span>'
     : '<span class="badge badge-pending">In Progress</span>';
   const isToday = ds===today;
+  let filled = 0, total = 0;
+  REPORT_SECTIONS.forEach(sec=> sec.fields.forEach(([key])=>{ total++; if(report[sec.key][key]!==null && report[sec.key][key]!==undefined) filled++; }));
+  const pct = total ? Math.round(filled/total*100) : 0;
   return `
+  ${preview?PREVIEW_NOTICE:''}
   <div class="card card-pad" style="margin-bottom:16px;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div class="rep-summary">
       <div>
         <div class="section-title" style="margin-bottom:4px;">Daily Performance Report</div>
         <div class="section-sub" style="margin-bottom:0;">${esc(ds)}${isToday?' · Today':''} ${statusBadge}</div>
       </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        ${!isToday?`<button class="btn btn-sm" id="backToTodayBtn">Back to today</button>`:''}
-        <button class="btn btn-primary" id="completeReportBtn" ${complete?'':'disabled title="Fill in every field (0 counts) before completing"'}>${ic('check')} ${report.status==='completed'?'Completed':'Complete Report'}</button>
-      </div>
+      <div class="rs-num">${filled}<span> / ${total}</span></div>
+      <div class="rs-bar" aria-hidden="true"><i style="width:${pct}%"></i></div>
+      ${!isToday?`<button class="btn btn-sm" id="backToTodayBtn">Back to today</button>`:''}
     </div>
   </div>
-  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;">
-    ${REPORT_SECTIONS.map(sec=>reportSectionCard(report, sec)).join('')}
+  <div class="card"><div class="rep-sections">
+    ${REPORT_SECTIONS.map(sec=>reportSectionCard(report, sec, preview)).join('')}
+  </div></div>
+  <div class="rep-sticky">
+    <span class="rs-n">${filled} of ${total}</span>
+    <span class="rs-hint">Enter 0 for anything that didn’t happen today — only empty fields block completion.</span>
+    <div class="rs-bar" aria-hidden="true"><i style="width:${pct}%"></i></div>
+    <button class="btn btn-primary" id="completeReportBtn" ${(complete&&!preview)?'':'disabled title="Fill in every field (0 counts) before completing"'}>${ic('check')} ${report.status==='completed'?'Completed':'Complete Report'}</button>
   </div>`;
 }
 
-function reportSectionCard(report, sec){
-  return `<div class="card card-pad">
-    <div class="section-title" style="font-size:14px; margin-bottom:10px;">${esc(sec.title)}</div>
-    <div style="display:flex; flex-direction:column; gap:10px;">
+function reportSectionCard(report, sec, preview){
+  const n = sec.fields.filter(([key])=> report[sec.key][key]!==null && report[sec.key][key]!==undefined).length;
+  return `<div class="rep-sec">
+    <h4>${esc(sec.title)} <small>${n}/${sec.fields.length}</small></h4>
+    <div class="rep-tiles">
       ${sec.fields.map(([key,label])=>{
         const val = report[sec.key][key];
-        return `<div>
+        return `<div class="rep-tile ${val===null||val===undefined?'empty':''}">
           <label class="field-label">${esc(label)}</label>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button class="btn btn-sm" data-step="-1" data-sec="${sec.key}" data-key="${key}" aria-label="Decrease">${ic('minus')}</button>
-            <input type="number" min="0" inputmode="numeric" data-field="${sec.key}.${key}" value="${val===null?'':val}" placeholder="—" style="text-align:center; font-weight:700;">
-            <button class="btn btn-sm" data-step="1" data-sec="${sec.key}" data-key="${key}" aria-label="Increase">${ic('plus')}</button>
+          <input type="number" min="0" step="1" inputmode="numeric" ${preview?'disabled':''} data-field="${sec.key}.${key}" value="${val===null?'':val}" placeholder="—" aria-label="${esc(sec.title)} — ${esc(label)}">
+          <div class="rt-btns">
+            <button class="btn btn-sm" ${preview?'disabled':''} data-step="-1" data-sec="${sec.key}" data-key="${key}" aria-label="Decrease">${ic('minus')}</button>
+            <button class="btn btn-sm" ${preview?'disabled':''} data-step="1" data-sec="${sec.key}" data-key="${key}" aria-label="Increase">${ic('plus')}</button>
           </div>
         </div>`;
       }).join('')}
@@ -233,55 +252,71 @@ AFTER_RENDER.reports = function(u){
 
   const teamDateInp = document.getElementById('teamReportDate');
   if(teamDateInp) teamDateInp.addEventListener('change', ()=>{ session._teamReportDate = teamDateInp.value; renderPageInto(u); });
-  if((session._reportView||'daily')==='team') return; // Team Reports view has no personal fields to wire up
+  if((session._reportView||'daily')==='team'){
+    // Team Reports: load the chosen date's DOWNLINE reports from the server once per (user,date),
+    // then re-render. The key is set first so a failed load can never loop.
+    const tds = session._teamReportDate || effectiveTodayStr();
+    const key = u.id+'|'+tds;
+    if(isMgmt(u) && isOnOrAfterLaunch(tds) && session._teamLoadedKey!==key){
+      session._teamLoadedKey = key;
+      loadTeamReports(u, tds).then(()=>renderPageInto(u)).catch(e=>{ console.error(e); toast((e&&e.message)||'Could not load team reports'); });
+    }
+    return;
+  }
 
   const ds = session._reportDate || effectiveTodayStr();
   if(!isOnOrAfterLaunch(effectiveTodayStr())) return;
+  if(isFutureReportDate(ds)) return; // preview only — form is rendered read-only, nothing to wire
 
   if(isMgmt(u)){
-    // Simple management report: comments/activities are only written to DB.mgmtReports when
-    // the Save button is clicked (not on every keystroke), so typing never triggers a full
-    // page re-render and there is no focus-loss issue to work around here.
+    // Management's report is written to the server only when Save/Submit is clicked (not on every
+    // keystroke), so typing never triggers a re-render or focus loss.
     const saveBtn = document.getElementById('saveMgmtReportBtn');
-    if(saveBtn) saveBtn.addEventListener('click', ()=>{
+    if(saveBtn) saveBtn.addEventListener('click', async ()=>{
       const comments = document.getElementById('mr_comments').value;
       const activities = document.getElementById('mr_activities').value;
-      const report = getOrCreateMgmtReport(u.id, ds);
-      saveMgmtReport(report, comments, activities);
-      log(u.id,'mgmt_report_saved',{reportId:report.id, date:report.date});
-      persist(); toast('Daily Report saved'); renderPageInto(u);
+      saveBtn.disabled = true;
+      try { await saveMgmtReportOnServer(ds, comments, activities); }
+      catch(e){ saveBtn.disabled = false; toast(e && e.isNetworkError ? 'Could not reach the server — your report was NOT saved.' : ((e&&e.message)||'Could not save the report')); return; }
+      toast('Daily Report saved'); renderPageInto(u);
     });
     return;
   }
 
   const report = getOrCreateDailyReport(u.id, ds);
+  const parse = (raw)=> raw===''? null : Math.max(0, Math.round(Number(raw)));
+  // A failed save must never leave the screen claiming a value that the server doesn't have:
+  // tell the user and reload the truth from the server.
+  const writeField = (sec, key, value)=> saveSalesReportField(ds, sec, key, value).catch(async e=>{
+    toast(e && e.isNetworkError ? 'Could not reach the server — that change was NOT saved.' : ((e&&e.message)||'Could not save that change'));
+    await hydrateReportsFromServer(u); renderPageInto(u);
+  });
 
   document.querySelectorAll('[data-field]').forEach(inp=>{
+    const [sec,key] = inp.dataset.field.split('.');
+    // 'input' keeps the Complete button in step while typing (local view only);
+    // 'change' (blur / Enter) is when the value is saved to the server.
     inp.addEventListener('input', ()=>{
-      const [sec,key] = inp.dataset.field.split('.');
-      const raw = inp.value;
-      const value = raw===''? null : Math.max(0, Math.round(Number(raw)));
-      setReportField(report, sec, key, value);
-      persist();
+      setReportField(report, sec, key, parse(inp.value));
       updateCompleteButton(report);
     });
+    inp.addEventListener('change', ()=>{ writeField(sec, key, parse(inp.value)); });
   });
-  document.querySelectorAll('[data-step]').forEach(b=> b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-step]').forEach(b=> b.addEventListener('click', async ()=>{
     const sec=b.dataset.sec, key=b.dataset.key, dir=Number(b.dataset.step);
     const cur = report[sec][key];
     const next = Math.max(0, (cur||0) + dir);
     setReportField(report, sec, key, next);
-    persist();
+    await writeField(sec, key, next);
     renderPageInto(u);
   }));
   const completeBtn = document.getElementById('completeReportBtn');
-  if(completeBtn) completeBtn.addEventListener('click', ()=>{
-    if(completeReport(report)){
-      log(u.id,'daily_report_completed',{reportId:report.id, date:report.date});
-      persist(); toast('Daily Report completed'); renderPageInto(u);
-    } else {
-      toast('Every field must have a value (0 is fine) before completing');
-    }
+  if(completeBtn) completeBtn.addEventListener('click', async ()=>{
+    if(!isReportComplete(report)){ toast('Every field must have a value (0 is fine) before completing'); return; }
+    completeBtn.disabled = true;
+    try { await completeSalesReportOnServer(ds); }
+    catch(e){ completeBtn.disabled = false; toast(e && e.isNetworkError ? 'Could not reach the server — the report was NOT completed.' : ((e&&e.message)||'Could not complete the report')); return; }
+    toast('Daily Report completed'); renderPageInto(u);
   });
 };
 function updateCompleteButton(report){

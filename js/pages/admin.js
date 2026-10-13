@@ -33,8 +33,8 @@ function renderAdminPage(u){
    department changes); Senior Admin and Head Admin get the full Manage workflow: search/filter,
    open a profile, edit contact + reference code, change role, reassign manager, switch
    department — each with a confirmation dialog, each reflected everywhere live (My/Team
-   visibility, Reference, other admin listings) because nothing here is cached — see
-   syncRefForUser()/refUser()/refManager() in data.js.
+   visibility, Reference, other admin listings) because nothing here is cached. Users and their
+   Reference entries are saved by the server (sync.js); refUser()/refManager() in data.js only read.
    ========================================================= */
 const ADMIN_ROLE_FILTER_GROUPS = [
   ['','All roles'],
@@ -69,7 +69,7 @@ function renderAdminUsers(u){
   </div>
   ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department, job title and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
   ${reviewCount? `<div class="card card-pad" style="margin-bottom:14px; background:var(--warning-tint); border-color:var(--warning); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-    <div style="flex:1; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
+    <div style="flex:1 1 260px; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
     <button class="btn btn-sm ${reviewOnly?'btn-primary':''}" id="toggleReviewOnlyBtn">${reviewOnly?'Showing review-only — show all':'Show accounts needing review'}</button>
   </div>` : ''}
   <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Name</th><th>Role</th><th>Job Title</th><th>Department</th><th>Reports to</th><th>Reference</th>${canManage?'<th></th>':''}</tr></thead><tbody>
@@ -95,6 +95,12 @@ function openUserAdminModal(userId, u){
   const target = DB.users.find(x=>x.id===userId);
   if(!target) return;
   const isSelf = target.id===u.id;
+  const isHeadAdmin = u.role==='headadmin';
+  // Server rule (mirrored here for clarity only — the API enforces it): admin/HR accounts and
+  // admin/HR roles are Head Admin territory.
+  const PRIV = ['junioradmin','senioradmin','headadmin','headhr'];
+  if(!isHeadAdmin && !isSelf && PRIV.includes(target.role)){ toast('Only Head Admin can edit admin or HR accounts'); return; }
+  const assignableRoles = ADMIN_ASSIGNABLE_ROLES.filter(r=> isHeadAdmin || !PRIV.includes(r));
   const ref = DB.refs.find(r=>r.userId===target.id);
   const mgrOptions = possibleManagersFor(target.id).sort((a,b)=>a.name.localeCompare(b.name));
   openModal(`
@@ -104,7 +110,7 @@ function openUserAdminModal(userId, u){
     <div class="field"><label class="field-label">Name</label><input id="ua_name" value="${esc(target.name)}"></div>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
       <div class="field"><label class="field-label">Role</label>
-        <select id="ua_role" ${isSelf?'disabled':''}>${ADMIN_ASSIGNABLE_ROLES.map(r=>`<option value="${r}" ${target.role===r?'selected':''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select>
+        <select id="ua_role" ${isSelf?'disabled':''}>${assignableRoles.map(r=>`<option value="${r}" ${target.role===r?'selected':''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select>
       </div>
       <div class="field"><label class="field-label">Department</label>
         <select id="ua_team" ${isSelf?'disabled':''}>
@@ -135,8 +141,17 @@ function openUserAdminModal(userId, u){
       <div class="field"><label class="field-label">WhatsApp number</label><input id="ua_wa" inputmode="numeric" value="${esc(ref?ref.whatsapp:'')}" placeholder="e.g. 01012345678" ${ref?'':'disabled'}></div>
     </div>
   </div>
-  <div class="modal-foot"><button class="btn btn-primary" id="saveUserAdminBtn">Save changes</button></div>`);
+  <div class="modal-foot">${isSelf?'':'<button class="btn" id="resetPwBtn" style="margin-right:auto;">Reset password</button>'}<button class="btn btn-primary" id="saveUserAdminBtn">Save changes</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
+  const rpb = document.getElementById('resetPwBtn');
+  if(rpb) rpb.addEventListener('click', async ()=>{
+    if(!confirm(`Reset the password for ${target.name}?\n\nA new temporary password will be shown once, and their current sessions will be signed out.`)) return;
+    rpb.disabled = true;
+    try{
+      const r = await resetUserPasswordOnServer(target.id);
+      showTempPasswordModal(target.name, r.temporaryPassword, u);
+    }catch(e){ rpb.disabled = false; reportUserWriteError(e, 'The password reset'); }
+  });
   ['ua_phone','ua_wa'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); }); });
   // Department AND reference-field applicability both follow the currently-SELECTED role+team
   // (not just whichever values the person had when the modal opened) — so promoting someone
@@ -199,21 +214,47 @@ function openUserAdminModal(userId, u){
       if(codeClash){ toast('That reference code is already in use'); return; }
     }
 
-    target.name = name;
+    const payload = {};
+    if(name!==target.name) payload.name = name;
     if(!isSelf){
-      target.role = newRole; target.team = newTeam; target.managerId = newManagerId;
-      if(jobTitleChanged){ target.jobTitle = newJobTitle; target.titleNeedsReview = false; }
+      if(roleChanged) payload.role = newRole;
+      if(teamChanged || roleChanged) payload.team = newTeam;
+      if(managerChanged) payload.managerId = newManagerId;
+      if(jobTitleChanged) payload.jobTitle = newJobTitle;
     }
-    syncRefForUser(target); // creates/removes/updates the ref entry to match the new role+team
-    const refAfter = DB.refs.find(r=>r.userId===target.id);
-    if(refAfter && willBeEligible){
-      refAfter.code = codeVal;
-      refAfter.phone = phoneLocalDisplay(normalizeEgyptPhone(phoneVal));
-      refAfter.whatsapp = phoneLocalDisplay(normalizeEgyptPhone(waVal));
+    // Reference-directory fields travel with the user change and are saved atomically by the server.
+    const existingRefNow = DB.refs.find(r=>r.userId===target.id);
+    const refChanged = willBeEligible && (!existingRefNow || existingRefNow.code!==codeVal || existingRefNow.phone!==phoneLocalDisplay(normalizeEgyptPhone(phoneVal)) || existingRefNow.whatsapp!==phoneLocalDisplay(normalizeEgyptPhone(waVal)));
+    if(!isSelf || existingRefNow){
+      if(refChanged) payload.reference = { code: codeVal, phone: phoneLocalDisplay(normalizeEgyptPhone(phoneVal)), whatsapp: phoneLocalDisplay(normalizeEgyptPhone(waVal)) };
     }
-    log(u.id,'admin_user_updated',{userId:target.id, roleChanged, teamChanged, managerChanged});
-    persist(); closeModal(); toast('User updated'); renderPageInto(u);
+    const saveBtn = document.getElementById('saveUserAdminBtn'); saveBtn.disabled = true;
+    (async ()=>{
+      try{
+        if(Object.keys(payload).length) await updateUserOnServer(target.id, payload);
+      }catch(e){
+        saveBtn.disabled = false;
+        reportUserWriteError(e, 'The change');
+        return; // nothing was saved: stay in the modal so the admin can correct and retry
+      }
+      closeModal(); toast('User updated'); renderPageInto(u);
+    })();
   });
+}
+
+// Shows a one-time temporary password. It exists only in this modal's DOM; it is never stored.
+function showTempPasswordModal(name, pw, u){
+  openModal(`
+  <div class="modal-head"><div style="font-weight:800;">Temporary password — ${esc(name)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
+  <div class="modal-body">
+    <div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12px; color:var(--warning);">Copy this now and hand it over securely. It will not be shown again. The user should change it after signing in.</div>
+    <div class="field"><label class="field-label">Temporary password</label><input id="tmpPwOut" readonly value="${esc(pw)}" style="font-family:monospace;"></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-primary" id="tmpPwDone">Done</button></div>`);
+  const done = ()=>{ closeModal(); renderPageInto(u); };
+  document.getElementById('modalCloseX').addEventListener('click', done);
+  document.getElementById('tmpPwDone').addEventListener('click', done);
+  const inp = document.getElementById('tmpPwOut'); if(inp){ inp.focus(); inp.select(); }
 }
 
 function openAddSalesUserModal(u){
@@ -223,6 +264,7 @@ function openAddSalesUserModal(u){
   <div class="modal-head"><div style="font-weight:800;">Add sales user</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
   <div class="modal-body">
     <div class="field"><label class="field-label">Full name</label><input id="nu_name" placeholder="e.g. Mona Adel"></div>
+    <div class="field"><label class="field-label">Work email (used to sign in)</label><input id="nu_email" type="email" autocomplete="off" placeholder="name@company.com"></div>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
       <div class="field"><label class="field-label">Role</label><select id="nu_role">${SALES_ROLES.map(r=>`<option value="${r}">${esc(ROLE_LABELS[r])}</option>`).join('')}</select></div>
       <div class="field"><label class="field-label">Department</label><select id="nu_team"><option value="residential">Residential</option><option value="commercial">Commercial</option></select></div>
@@ -262,15 +304,17 @@ function openAddSalesUserModal(u){
       if(!isDigitsOnly(wa) || !normalizeEgyptPhone(wa)){ toast('Enter a valid WhatsApp number (digits only)'); return; }
     }
     const jobTitle = document.getElementById('nu_jobtitle').value || null;
-    const newUser = { id: uid('u'), name, role, team, managerId, avatar: avatarColor(name), jobTitle, titleNeedsReview:false };
-    DB.users.push(newUser);
-    syncRefForUser(newUser);
-    if(willBeEligible){
-      const ref = DB.refs.find(r=>r.userId===newUser.id);
-      if(ref){ ref.phone = phoneLocalDisplay(normalizeEgyptPhone(phone)); ref.whatsapp = phoneLocalDisplay(normalizeEgyptPhone(wa)); }
-    }
-    log(u.id,'admin_user_added',{userId:newUser.id, role, team});
-    persist(); closeModal(); toast(name+' added'); renderPageInto(u);
+    const email = document.getElementById('nu_email').value.trim().toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast('Enter a valid work email'); return; }
+    const btn = document.getElementById('saveNewSalesUserBtn'); btn.disabled = true;
+    (async ()=>{
+      let r;
+      try{
+        r = await createUserOnServer({ name, email, role, team, managerId, jobTitle, reference: willBeEligible ? { phone: phoneLocalDisplay(normalizeEgyptPhone(phone)), whatsapp: phoneLocalDisplay(normalizeEgyptPhone(wa)) } : undefined });
+      }catch(e){ btn.disabled = false; reportUserWriteError(e, 'The new user'); return; }
+      if(r.temporaryPassword){ toast(name+' added'); showTempPasswordModal(name, r.temporaryPassword, u); }
+      else { closeModal(); toast(name+' added'); renderPageInto(u); }
+    })();
   });
 }
 function renderAdminUnits(u){
@@ -292,17 +336,18 @@ function renderAdminTransfers(u){
     const to = DB.users.find(x=>x.id===t.toSalespersonId);
     const kind = t.type==='claim' ? 'Claim (owner contact already exists with another salesperson)' : 'Transfer (expired relationship)';
     return `<div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border);">
-      <div style="flex:1;"><div style="font-weight:700; font-size:13px;">${esc(o?o.name:'—')} ${unit?'· '+esc(unitLabel(unit)):(t.type==='claim'?' · owner contact, no unit yet':'')}</div><div style="font-size:11.5px; color:var(--text-faint);">${kind} · ${esc(from?from.name:'—')} → ${esc(to?to.name:'—')} · requested ${fmtDateTime(t.at)}</div></div>
+      <div style="flex:1;"><div style="font-weight:700; font-size:13px;">${esc(o?o.name:(t.ownerName||'—'))} ${t.team?`<span class="team-pill ${t.team}" style="margin-left:4px;">${t.team}</span>`:''} ${unit?'· '+esc(unitLabel(unit)):(t.type==='claim'?' · owner contact, no unit yet':'')}</div><div style="font-size:11.5px; color:var(--text-faint);">${kind} · ${esc(from?from.name:'—')} → ${esc(to?to.name:'—')} · requested ${fmtDateTime(t.at)}</div></div>
       <button class="btn btn-sm btn-danger" data-rejecttransfer="${t.id}">Reject</button>
       <button class="btn btn-sm btn-primary" data-approvetransfer="${t.id}">Approve</button>
     </div>`;
   }).join('') : emptyRow('No pending owner transfer/claim requests.')}</div>`;
 }
 function renderAdminAudit(u){
-  return `<div class="card">${DB.auditLog.length? DB.auditLog.slice(0,60).map(l=>{
+  const loaded = session._auditLoaded;
+  return `<div class="card" id="adminAuditCard">${DB.auditLog.length? DB.auditLog.slice(0,200).map(l=>{
     const actor = DB.users.find(x=>x.id===l.actor);
-    return `<div style="padding:10px 16px; border-bottom:1px solid var(--border); font-size:12.5px;"><b>${esc(actor?actor.name:l.actor)}</b> — ${l.action.replace(/_/g,' ')} <span style="color:var(--text-faint);">· ${fmtDateTime(l.at)}</span></div>`;
-  }).join('') : emptyRow('No audit history yet.')}</div>`;
+    return `<div style="padding:10px 16px; border-bottom:1px solid var(--border); font-size:12.5px;"><b>${esc(actor?actor.name:(l.actor||'System'))}</b> — ${esc(String(l.action).replace(/_/g,' '))} <span style="color:var(--text-faint);">· ${fmtDateTime(l.at)}</span></div>`;
+  }).join('') : emptyRow(loaded ? 'No audit history yet.' : 'Loading the audit log from the server…')}</div>`;
 }
 /* =========================================================
    PART 1 (admin side) — Deleted Owners / Deleted Units management — Head Admin only.
@@ -350,7 +395,7 @@ function renderAdminDeletedUnits(u){
    ========================================================= */
 function renderAdminAvailablePool(u){
   const list = expiredOwnerUnitsCompanyWide();
-  return `<div class="section-sub">${list.length} relationship${list.length===1?'':'s'} expired (not updated in 30+ days) across both teams. Reassigning a relationship only affects that one unit — the owner's other units are untouched.</div>
+  return `<div class="section-sub">${list.length} relationship${list.length===1?'':'s'} expired (not updated in 30+ days) in the team you are currently viewing (switch Residential / Commercial to see the other). Reassigning a relationship only affects that one unit — the owner's other units are untouched.</div>
   <div class="card">${list.length? list.map(r=>{
     const o = DB.owners.find(x=>x.id===r.ownerId);
     const unit = DB.units.find(x=>x.id===r.unitId);
@@ -445,7 +490,7 @@ function openOwnerTransferModal(ownerId, u){
   document.getElementById('ot_destSearch').addEventListener('input', renderDestOptions);
   const fromSel = document.getElementById('ot_from');
   if(fromSel.tagName==='SELECT') fromSel.addEventListener('change', renderDestOptions);
-  document.getElementById('confirmTransferBtn').addEventListener('click', ()=>{
+  document.getElementById('confirmTransferBtn').addEventListener('click', async ()=>{
     const fromId = document.getElementById('ot_from').value;
     const toSel = document.getElementById('ot_to');
     const toId = toSel.value;
@@ -453,13 +498,24 @@ function openOwnerTransferModal(ownerId, u){
     const fromUser = DB.users.find(x=>x.id===fromId), toUser = DB.users.find(x=>x.id===toId);
     const ok = confirm(`Transfer ${o.name} from ${fromUser?fromUser.name:'—'} to ${toUser?toUser.name:'—'}?\n\nAll units and history currently held by ${fromUser?fromUser.name:'this salesperson'} for this owner will move to ${toUser?toUser.name:'the new salesperson'}. Nothing is duplicated or deleted.`);
     if(!ok) return;
-    const moved = transferOwnerFromTo(o, fromId, toId, u.id);
+    let resp;
+    try { resp = await NA1_API.post('/admin/owners/'+encodeURIComponent(o.id)+'/transfer', { fromSalespersonId: fromId, toSalespersonId: toId }); }
+    catch(e){ reportUnitWriteError(e, 'transfer this owner'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    const moved = resp.relationshipsMoved;
     closeModal(); toast(`${o.name} transferred to ${toUser?toUser.name:'—'} (${moved} unit relationship${moved===1?'':'s'} moved)`); renderPageInto(u);
   });
 }
 
 AFTER_RENDER.admin = function(u){
-  document.querySelectorAll('[data-admintab]').forEach(b=> b.addEventListener('click', ()=>{ session._adminTab=b.dataset.admintab; renderPageInto(u); }));
+  if((session._adminTab||'users')==='audit' && !session._auditLoading && Date.now()-(session._auditFetchedAt||0) > 15000){
+    session._auditLoading = true; session._auditFetchedAt = Date.now();   // time gate: re-render below must not refetch in a loop
+    hydrateAuditLogFromServer().then(ok=>{
+      session._auditLoading = false; session._auditLoaded = true;
+      if(ok && (session._adminTab||'users')==='audit' && document.getElementById('adminAuditCard')) renderPageInto(u);
+    });
+  }
+  document.querySelectorAll('[data-admintab]').forEach(b=> b.addEventListener('click', ()=>{ session._adminTab=b.dataset.admintab; if(b.dataset.admintab==='audit') session._auditFetchedAt=0; renderPageInto(u); }));
   const us = document.getElementById('adminUserSearch');
   if(us){
     us.addEventListener('input', ()=>{ session._adminUserSearch = us.value; renderPageInto(u); });
@@ -471,64 +527,44 @@ AFTER_RENDER.admin = function(u){
   const trb = document.getElementById('toggleReviewOnlyBtn'); if(trb) trb.addEventListener('click', ()=>{ session._adminReviewOnly = !session._adminReviewOnly; renderPageInto(u); });
   const au = document.getElementById('addSalesUserBtn'); if(au) au.addEventListener('click', ()=> openAddSalesUserModal(u));
   document.querySelectorAll('[data-manageuser]').forEach(b=> b.addEventListener('click', ()=> openUserAdminModal(b.dataset.manageuser, u)));
-  document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', ()=>{
-    const un = DB.units.find(x=>x.id===b.dataset.approveunit); un.pending=false;
-    log(u.id,'unit_approved',{unitId:un.id}); persist(); toast('Unit approved'); renderPageInto(u);
+  document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', async ()=>{
+    try { await NA1_API.post('/admin/units/'+encodeURIComponent(b.dataset.approveunit)+'/approve', {}); }
+    catch(e){ reportUnitWriteError(e, 'approve this unit'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast('Unit approved'); renderPageInto(u);
   }));
-  document.querySelectorAll('[data-approvetransfer]').forEach(b=> b.addEventListener('click', ()=>{
-    const t = DB.transfers.find(x=>x.id===b.dataset.approvetransfer); t.status='approved'; t.decidedAt=now(); t.decidedBy=u.id;
-    if(t.type==='claim'){
-      if(t.unitId){
-        // Creates a NEW relationship for the requesting salesperson on that specific unit only —
-        // it never duplicates the owner record and never touches that owner's other relationships.
-        DB.ownerUnits.push(makeOwnerUnitRel(t.ownerId, t.unitId, t.toSalespersonId, 0));
-      } else {
-        // Owner creation is independent of Units now — a claim can be made on the CONTACT
-        // itself, with no unit involved yet. Approving it grants the claimant shared access
-        // to that one owner record (never a duplicate owner, and the original holder's own
-        // relationships are untouched); they can "Add unit" to it afterward like any owner
-        // they hold.
-        const owner = DB.owners.find(x=>x.id===t.ownerId);
-        if(owner && !(owner.sharedWith||[]).includes(t.toSalespersonId)){
-          owner.sharedWith = owner.sharedWith || [];
-          owner.sharedWith.push(t.toSalespersonId);
-        }
-      }
-      log(u.id,'owner_claim_approved',{ownerId:t.ownerId, unitId:t.unitId||null, to:t.toSalespersonId});
-    } else {
-      // Transfer applies ONLY to this specific owner-unit relationship, not the owner's other units.
-      const rel = DB.ownerUnits.find(x=>x.id===t.ownerUnitId);
-      if(rel){ rel.salespersonId = t.toSalespersonId; rel.lastUpdateAt=now(); rel.nextUpdateAt=rel.lastUpdateAt+30*86400000; rel.reminderAt=rel.lastUpdateAt+25*86400000; rel.status='active'; }
-      log(u.id,'owner_transfer_approved',{ownerUnitId:t.ownerUnitId, to:t.toSalespersonId});
-    }
-    notify(t.toSalespersonId,'system','Your owner request was approved','owners');
-    persist(); toast('Request approved'); renderPageInto(u);
-  }));
-  document.querySelectorAll('[data-rejecttransfer]').forEach(b=> b.addEventListener('click', ()=>{
-    const t = DB.transfers.find(x=>x.id===b.dataset.rejecttransfer); t.status='rejected'; t.decidedAt=now(); t.decidedBy=u.id;
-    log(u.id,'owner_transfer_rejected',{transferId:t.id});
-    notify(t.toSalespersonId,'system','Your owner request was rejected','owners');
-    persist(); toast('Request rejected'); renderPageInto(u);
-  }));
+  // Claim / transfer decisions are made by the SERVER (Senior Admin and above): it creates the
+  // relationship or grants the share, notifies the requester and writes the audit log. The screen
+  // then reloads the real state instead of patching local arrays.
+  const decideTransfer = (id, verb, okMsg)=> async ()=>{
+    try { await NA1_API.post('/admin/owner-transfers/'+encodeURIComponent(id)+'/'+verb, {}); }
+    catch(e){ reportUnitWriteError(e, verb+' this request'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast(okMsg); renderPageInto(u);
+  };
+  document.querySelectorAll('[data-approvetransfer]').forEach(b=> b.addEventListener('click', decideTransfer(b.dataset.approvetransfer,'approve','Request approved')));
+  document.querySelectorAll('[data-rejecttransfer]').forEach(b=> b.addEventListener('click', decideTransfer(b.dataset.rejecttransfer,'reject','Request rejected')));
 
   // ---- Head-Admin-only tabs (renderAdminPage already blocks these from rendering for anyone else) ----
-  document.querySelectorAll('[data-restoreowner]').forEach(b=> b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-restoreowner]').forEach(b=> b.addEventListener('click', async ()=>{
     const o = DB.owners.find(x=>x.id===b.dataset.restoreowner);
     if(!o) return;
     if(!confirm(`Restore ${o.name}? They will reappear in their salesperson's normal Owners list with all history and linked units intact.`)) return;
-    restoreOwner(o);
-    log(u.id,'owner_restored',{ownerId:o.id});
-    persist(); toast('Owner restored'); renderPageInto(u);
+    try { await NA1_API.post('/admin/owners/'+encodeURIComponent(o.id)+'/restore', {}); }
+    catch(e){ reportUnitWriteError(e, 'restore this owner'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast('Owner restored'); renderPageInto(u);
   }));
-  document.querySelectorAll('[data-restoreunit]').forEach(b=> b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-restoreunit]').forEach(b=> b.addEventListener('click', async ()=>{
     const un = DB.units.find(x=>x.id===b.dataset.restoreunit);
     if(!un) return;
     if(!confirm(`Restore ${un.compound} — ${un.unitType}? It will reappear in normal inventory/My Units.`)) return;
-    restoreUnit(un);
-    log(u.id,'unit_restored',{unitId:un.id});
-    persist(); toast('Unit restored'); renderPageInto(u);
+    try { await NA1_API.post('/admin/units/'+encodeURIComponent(un.id)+'/restore', {}); }
+    catch(e){ reportUnitWriteError(e, 'restore this unit'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast('Unit restored'); renderPageInto(u);
   }));
-  document.querySelectorAll('[data-poolreassign]').forEach(b=> b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-poolreassign]').forEach(b=> b.addEventListener('click', async ()=>{
     const relId = b.dataset.poolreassign;
     const rel = DB.ownerUnits.find(x=>x.id===relId);
     const destSel = document.querySelector(`[data-pooldest="${relId}"]`);
@@ -539,11 +575,10 @@ AFTER_RENDER.admin = function(u){
     const fromUser = DB.users.find(x=>x.id===rel.salespersonId);
     const toUser = DB.users.find(x=>x.id===toId);
     if(!confirm(`Reassign ${o?o.name:'this owner'} — ${unitLabel(unit)} from ${fromUser?fromUser.name:'—'} to ${toUser?toUser.name:'—'}?\n\nOnly this one relationship changes — the owner's other units are untouched.`)) return;
-    const fromId = rel.salespersonId;
-    rel.salespersonId = toId;
-    log(u.id,'owner_unit_relationship_reassigned',{ownerUnitId:rel.id, from:fromId, to:toId});
-    notify(toId,'system','An owner relationship was reassigned to you: '+(o?o.name:''),'owners','poolreassign_'+rel.id+'_'+now());
-    persist(); toast('Relationship reassigned'); renderPageInto(u);
+    try { await NA1_API.post('/owners/relationships/'+encodeURIComponent(relId)+'/reassign', { toSalespersonId: toId, team: o?o.team:undefined }); }
+    catch(e){ reportUnitWriteError(e, 'reassign this relationship'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    toast('Relationship reassigned'); renderPageInto(u);
   }));
   document.querySelectorAll('[data-starttransfer]').forEach(b=> b.addEventListener('click', ()=> openOwnerTransferModal(b.dataset.starttransfer, u)));
   const ots = document.getElementById('ownerTransferSearch');

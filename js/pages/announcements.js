@@ -83,6 +83,8 @@ function audiencePickerHtml(){
 }
 
 function renderAnnouncementsPage(u){
+  // Arriving from a notification click: expand that announcement in THIS render (consumed once).
+  if(session._openAnnouncementId){ session._expandedAnnouncement = session._openAnnouncementId; session._openAnnouncementId = null; }
   const hr = isHeadHR(u);
   const history = visibleAnnouncementsFor(u);
   const myUnreadAnnouncementIds = new Set(DB.notifications.filter(n=>n.userId===u.id && n.type==='announcement' && !n.read).map(n=>n.meta && n.meta.announcementId));
@@ -108,11 +110,12 @@ function renderAnnouncementsPage(u){
 }
 
 AFTER_RENDER.announcements = function(u){
-  // If we arrived here via a notification click, auto-expand the matching announcement once,
-  // then clear the flag so it doesn't keep forcing itself open on every later visit.
-  if(session._openAnnouncementId){
-    session._expandedAnnouncement = session._openAnnouncementId;
-    session._openAnnouncementId = null;
+  // Opening the page re-fetches (at most every 5 s) so announcements that arrived since sign-in appear.
+  if(!session._anLastFetch || Date.now()-session._anLastFetch > 5000){
+    session._anLastFetch = Date.now();
+    const sigOf = ()=> DB.announcements.map(a=>a.id).join(',');
+    const before = sigOf();
+    hydrateAnnouncementsFromServer(u).then(ok=>{ if(ok && sigOf()!==before && session.page==='announcements') renderPageInto(u); });
   }
   document.querySelectorAll('[data-toggleannouncement]').forEach(el=> el.addEventListener('click', ()=>{
     const id = el.dataset.toggleannouncement;
@@ -157,8 +160,8 @@ AFTER_RENDER.announcements = function(u){
   }));
 
   const sendBtn = document.getElementById('sendAnnouncementBtn');
-  if(sendBtn) sendBtn.addEventListener('click', ()=>{
-    if(!isHeadHR(u)) return; // defense in depth — this button only ever renders for Head of HR
+  if(sendBtn) sendBtn.addEventListener('click', async ()=>{
+    if(!isHeadHR(u)) return; // convenience only — the server enforces that only Head of HR can publish
     const title = document.getElementById('an_title').value.trim();
     const message = document.getElementById('an_message').value.trim();
     if(!title){ toast('Announcement title is required'); return; }
@@ -169,16 +172,25 @@ AFTER_RENDER.announcements = function(u){
     if(chosen.type==='team' && !chosen.team){ toast('Select a team'); return; }
     if(chosen.type==='employees' && !chosen.employeeIds.length){ toast('Select at least one employee'); return; }
 
-    const recipients = computeAnnouncementRecipients(chosen, u.id);
+    const recipients = computeAnnouncementRecipients(chosen, u.id); // preview only; the server resolves the real list
     if(!recipients.length){ toast('The selected audience has no eligible recipients'); return; }
 
     const ok = confirm(`Publish this announcement?\n\n"${title}"\n\nAudience: ${audienceSummaryLabel(chosen)}\nRecipients: ${recipients.length} employee${recipients.length===1?'':'s'}\n\nEach recipient will get an in-app notification immediately. This cannot be changed after publishing — to reach a different audience, send a new announcement.`);
     if(!ok) return;
 
-    sendAnnouncement(u, title, message, chosen);
+    sendBtn.disabled = true;
+    let res;
+    try{
+      res = await publishAnnouncementOnServer(title, message, chosen);
+    }catch(e){
+      sendBtn.disabled = false;
+      // Nothing was saved anywhere: the form keeps its text so the same publish can be retried safely.
+      toast(e && e.isNetworkError ? 'Could not reach the server — the announcement was NOT sent.' : ((e && e.message) || 'Could not send the announcement'));
+      return;
+    }
     session._anAudience = null; // reset the compose form's audience picker for next time
     session._anEmployeeSearch = '';
-    toast('Announcement sent to '+recipients.length+' employee'+(recipients.length===1?'':'s'));
+    toast('Announcement sent to '+res.recipientCount+' employee'+(res.recipientCount===1?'':'s'));
     renderPageInto(u);
   });
 };

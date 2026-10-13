@@ -128,35 +128,38 @@ function pickMany(arr,n){ const c=[...arr]; const out=[]; for(let i=0;i<n && c.l
 // identical logic applied to accounts saved under the pre-this-round data version).
 function buildUsers(){
   const u = [];
-  const add = (id,name,role,team,managerId,title,needsReview)=> u.push({id,name,role,team,managerId,avatar:avatarColor(name),jobTitle:title||null,titleNeedsReview:!!needsReview});
+  // `email` mirrors na1-backend/src/seed/seed.js exactly (same ids, same emails) so the real
+  // login screen (shell.js) can authenticate against the real backend and land on the matching
+  // local profile. See api.js / session.js setAuthenticatedUser() for how the two are joined.
+  const add = (id,name,email,role,team,managerId,title,needsReview)=> u.push({id,name,email,role,team,managerId,avatar:avatarColor(name),jobTitle:title||null,titleNeedsReview:!!needsReview});
   // Residential
-  add('ceo1','Ahmed El Sayed','ceo',null,null,'CEO',false);
-  add('hos1','Rania Fahmy','headofsales',null,'ceo1','Head of Sales',false);
-  add('dir1','Amr Hassan','director','residential','hos1','Director',false);
-  add('m1','Dina Youssef','manager','residential','dir1','Sales Manager',false);
-  add('tl1','Hossam Nabil','teamleader','residential','m1','Team Leader',false);
+  add('ceo1','Ahmed El Sayed','ceo@newavenue.demo','ceo',null,null,'CEO',false);
+  add('hos1','Rania Fahmy','hos@newavenue.demo','headofsales',null,'ceo1','Head of Sales',false);
+  add('dir1','Amr Hassan','dir.res@newavenue.demo','director','residential','hos1','Director',false);
+  add('m1','Dina Youssef','manager.res@newavenue.demo','manager','residential','dir1','Sales Manager',false);
+  add('tl1','Hossam Nabil','tl.res@newavenue.demo','teamleader','residential','m1','Team Leader',false);
   // role:'salesperson' has no unambiguous mapping to Junior vs Senior Sales (nothing in the
   // existing data distinguishes tenure) — each gets a sensible default so the app and the new
   // Title Review admin screen both have real, varied examples, but is flagged needsReview so a
   // Senior/Head Admin must confirm or correct it (see admin.js "Title review" tab).
-  add('s1','Mona Adel','salesperson','residential','tl1','Senior Sales',true);
-  add('s2','Karim Fathy','salesperson','residential','tl1','Junior Sales',true);
-  add('s3','Yara Ali','salesperson','residential','tl1','Senior Sales',true);
-  add('s6','Omar Sherif','salesperson','residential','tl1','Junior Sales',true);
+  add('s1','Mona Adel','s1@newavenue.demo','salesperson','residential','tl1','Senior Sales',true);
+  add('s2','Karim Fathy','s2@newavenue.demo','salesperson','residential','tl1','Junior Sales',true);
+  add('s3','Yara Ali','s3@newavenue.demo','salesperson','residential','tl1','Senior Sales',true);
+  add('s6','Omar Sherif','s6@newavenue.demo','salesperson','residential','tl1','Junior Sales',true);
   // Commercial
-  add('dir2','Heba El Nagar','director','commercial','hos1','Director',false);
-  add('m2','Sherif Adel','manager','commercial','dir2','Sales Manager',false);
-  add('tl2','Nour Khaled','teamleader','commercial','m2','Team Leader',false);
-  add('s4','Tarek Samir','salesperson','commercial','tl2','Junior Sales',true);
-  add('s5','Lobna Adly','salesperson','commercial','tl2','Senior Sales',true);
-  add('s7','Farida Gamal','salesperson','commercial','tl2','Junior Sales',true);
+  add('dir2','Heba El Nagar','dir.com@newavenue.demo','director','commercial','hos1','Director',false);
+  add('m2','Sherif Adel','manager.com@newavenue.demo','manager','commercial','dir2','Sales Manager',false);
+  add('tl2','Nour Khaled','tl.com@newavenue.demo','teamleader','commercial','m2','Team Leader',false);
+  add('s4','Tarek Samir','s4@newavenue.demo','salesperson','commercial','tl2','Junior Sales',true);
+  add('s5','Lobna Adly','s5@newavenue.demo','salesperson','commercial','tl2','Senior Sales',true);
+  add('s7','Farida Gamal','s7@newavenue.demo','salesperson','commercial','tl2','Junior Sales',true);
   // Admins — pure administrative positions, not sales job titles (see displayTitle()); left null.
-  add('ja1','Salma Ezz','junioradmin',null,null,null,false);
-  add('sa1','Mostafa Reda','senioradmin',null,null,null,false);
-  add('ha1','Laila Mansour','headadmin',null,null,null,false);
+  add('ja1','Salma Ezz','junioradmin@newavenue.demo','junioradmin',null,null,null,false);
+  add('sa1','Mostafa Reda','senioradmin@newavenue.demo','senioradmin',null,null,null,false);
+  add('ha1','Laila Mansour','headadmin@newavenue.demo','headadmin',null,null,null,false);
   // Human Resources — a separate function from the admin hierarchy above; this is the only
   // account the Company Announcements compose screen is available to (see pages/announcements.js).
-  add('hr1','Yasmin Adly','headhr',null,null,null,false);
+  add('hr1','Yasmin Adly','headhr@newavenue.demo','headhr',null,null,null,false);
   return u;
 }
 
@@ -319,7 +322,7 @@ function makeOwnerUnitRel(ownerId, unitId, salespersonId, lastUpdateDaysAgo){
     status: 'active', // active | transferred
     lastUpdateAt,
     nextUpdateAt: lastUpdateAt + 30*86400000,
-    reminderAt: lastUpdateAt + 25*86400000,
+    reminderAt: lastUpdateAt + 28*86400000,
     createdAt: lastUpdateAt
   };
 }
@@ -366,8 +369,8 @@ function buildOwnersAndRelationships(users, units){
   });
   // force a couple of demo states: one relationship "soon", one "expired" (available for transfer)
   const active = ownerUnits.filter(r=>r.status==='active');
-  if(active[0]){ active[0].lastUpdateAt = daysAgo(27); active[0].nextUpdateAt = active[0].lastUpdateAt+30*86400000; active[0].reminderAt = active[0].lastUpdateAt+25*86400000; }
-  if(active[1]){ active[1].lastUpdateAt = daysAgo(31); active[1].nextUpdateAt = active[1].lastUpdateAt+30*86400000; active[1].reminderAt = active[1].lastUpdateAt+25*86400000; }
+  if(active[0]){ active[0].lastUpdateAt = daysAgo(29); active[0].nextUpdateAt = active[0].lastUpdateAt+30*86400000; active[0].reminderAt = active[0].lastUpdateAt+28*86400000; }
+  if(active[1]){ active[1].lastUpdateAt = daysAgo(31); active[1].nextUpdateAt = active[1].lastUpdateAt+30*86400000; active[1].reminderAt = active[1].lastUpdateAt+28*86400000; }
   return { owners, ownerUnits };
 }
 
@@ -436,6 +439,10 @@ function ownerHeldByOthers(ownerId, excludingSpId){
    ========================================================= */
 function isOwnerDeleted(o){ return !!(o && o.deletedAt); }
 function isUnitDeleted(un){ return !!(un && un.deletedAt); }
+// DEPRECATED local mutators (softDeleteOwner / restoreOwner / softDeleteUnit / restoreUnit /
+// transferOwnerFromTo below): since the backend integration NO screen calls them — owner and unit
+// changes are made by the server (DELETE/restore/transfer endpoints) and the screen then reloads.
+// They are kept only because older automated tests exercise them; never call them from the UI.
 function softDeleteOwner(owner, actorId){
   owner.deletedAt = now(); owner.deletedBy = actorId;
 }
@@ -690,7 +697,13 @@ const DAILY_REPORT_FIELDS = [
 ];
 function pad2(n){ return String(n).padStart(2,'0'); }
 function dateStr(d){ d=d||new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
-function todayStr(){ return dateStr(new Date()); }
+// "Today" for Daily Reports is the EGYPT calendar date (Africa/Cairo), not the browser's local
+// date, so every user — wherever their device clock/zone is — files against the same business day
+// the server uses (see na1-backend/src/utils/clock.js).
+function todayStr(){
+  try { return new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
+  catch(e){ return dateStr(new Date()); }
+}
 function isOnOrAfterLaunch(ds){ return ds >= DAILY_REPORT_LAUNCH_DATE; }
 function previousDateStr(ds){
   const [y,m,d] = ds.split('-').map(Number);
@@ -708,7 +721,9 @@ function getDailyReport(spId, ds){ return DB.dailyReports.find(r=>r.salespersonI
 function getOrCreateDailyReport(spId, ds){
   let r = getDailyReport(spId, ds);
   if(r) return r;
-  r = { id: uid('dr'), salespersonId: spId, date: ds, status:'in_progress',
+  // `_draft` marks a blank, NOT-yet-saved view-model row: it has no server record, so for status
+  // purposes it counts as "missing" until the first value is actually saved (see reportStatusOf).
+  r = { id: uid('dr'), salespersonId: spId, date: ds, status:'in_progress', _draft:true,
     ...blankReportFields(), createdAt: now(), updatedAt: now(), completedAt: null };
   DB.dailyReports.push(r);
   return r;
@@ -729,7 +744,7 @@ function completeReport(report){
 }
 function reportStatusOf(spId, ds){
   const r = getDailyReport(spId, ds);
-  if(!r) return 'missing';
+  if(!r || r._draft) return 'missing';
   return r.status; // 'in_progress' | 'completed'
 }
 // Status of a PERSON's own report for a date, routed to the right collection for their role:
@@ -874,8 +889,9 @@ function isAnnouncementRecipient(announcement, userId){
 // This mirrors the backend's enforced GET /api/announcements behavior (routes/announcements.js)
 // so the frontend demo layer cannot show more than the real API would ever return.
 function visibleAnnouncementsFor(u){
-  if(isHeadHR(u)) return announcementsHistory().filter(a=>a.byId===u.id);
-  return announcementsHistory().filter(a=>isAnnouncementRecipient(a,u.id));
+  // The server already returns ONLY what this user may see (HR: their own sends; everyone else:
+  // announcements addressed to them), so there is no client-side filtering to get wrong.
+  return announcementsHistory();
 }
 // Sends an announcement to a SPECIFIC, resolved audience AND the real notifications that go with
 // it, in one atomic step — there is no "sent" state that isn't backed by both the announcement
@@ -890,18 +906,10 @@ function visibleAnnouncementsFor(u){
 // backend's design choice (see routes/announcements.js) of never changing recipients after
 // publish, which avoids ever silently exposing a restricted announcement to a new employee or
 // silently revoking it from someone already notified.
-function sendAnnouncement(author, title, message, audience){
-  const aud = audience || {type:'everyone'};
-  const recipients = computeAnnouncementRecipients(aud, author.id);
-  const a = { id: uid('an'), title, message, byId: author.id, at: now(), audience: aud, recipientCount: recipients.length };
-  DB.announcements.unshift(a);
-  recipients.forEach(u=>{
-    notify(u.id, 'announcement', 'New company announcement: '+title, 'announcements', 'announcement_'+a.id, {announcementId:a.id});
-  });
-  log(author.id, 'announcement_sent', {announcementId:a.id, title, audienceType:aud.type, recipientCount:recipients.length});
-  persist();
-  return a;
-}
+// Publishing now goes through the server (publishAnnouncementOnServer in sync.js): the server
+// resolves the real recipients, stores the announcement and creates one notification per
+// recipient in a single transaction. The old browser-side implementation was removed.
+function sendAnnouncement(){ throw new Error('Announcements are published by the server — use publishAnnouncementOnServer()'); }
 
 // Migration v5 -> v6: adds owners.deletedAt/deletedBy and units.deletedAt/deletedBy/updatedAt
 // (Part 1 — soft delete). This is an IN-PLACE, additive-only migration: every existing owner
@@ -987,11 +995,37 @@ function loadDB(){
   saveDB(fresh);
   return fresh;
 }
+// Collections whose source of truth is the BACKEND DATABASE (Owners, Units, Owner transfers/claims,
+// Daily Reports). They are held in memory only: never written to localStorage (so owners' phone
+// numbers and report data do not linger in the browser after logout / on shared devices), and
+// emptied at page load so neither stale cached copies nor the built-in demo dataset can ever be
+// shown as if they were real. They are filled by js/sync.js after a verified login; if the server
+// cannot be reached the screens stay empty and an error is shown — there is NO silent fallback.
+const SERVER_OWNED_KEYS = ['owners','ownerUnits','units','transfers','dailyReports','mgmtReports','refs','notifications','announcements','auditLog'];
+function withoutServerOwned(db){
+  const copy = Object.assign({}, db);
+  SERVER_OWNED_KEYS.forEach(k=>{ copy[k] = []; });
+  copy.requests = { residential: [], commercial: [] }; copy.readPositions = {}; copy.requestRead = {}; copy.requestUnread = {}; copy.notifUnread = 0;
+  copy.users = buildUsers(); // the real directory is server-owned: only the built-in demo roster is ever stored locally
+  delete copy._usersHydrated;
+  delete copy.ownerCap; delete copy._ownersHydrated; delete copy._ownersHydratedTeam; delete copy._teamSummary;
+  return copy;
+}
 function saveDB(db){
-  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); }catch(e){ console.warn('save failed', e); }
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(withoutServerOwned(db))); }catch(e){ console.warn('save failed', e); }
 }
 
 let DB = loadDB();
+// Requests are server-owned too (object-shaped, so reset separately): the feed, each user's read
+// position and the unread counts all come from the server after sign-in.
+function resetServerOwned(){
+  SERVER_OWNED_KEYS.forEach(k=>{ DB[k] = []; });
+  DB.requests = { residential: [], commercial: [] };
+  DB.readPositions = {};                  // legacy demo field, unused
+  DB.notifUnread = 0;
+  DB.requestRead = {}; DB.requestUnread = {};   // per team: last-read request id / unread count
+}
+resetServerOwned();
 function persist(){ saveDB(DB); }
 
 function log(actor, action, details){
@@ -1001,49 +1035,9 @@ function notify(userId, type, text, link, key, meta){
   if(key && DB.notifications.some(n=>n.userId===userId && n.key===key)) return;
   DB.notifications.unshift({id:uid('n'), userId, type, text, link, read:false, at: now(), key, meta: meta||null});
 }
-function syncNotifications(u){
-  if(!u) return;
-  if(u.role==='salesperson'){
-    // Leads module is Phase 2 / inactive — no fresh-lead or lead-reminder notifications are generated
-    // while LEADS_MODULE_ENABLED is false. The underlying lead data/logic is left intact, just dormant.
-    if(LEADS_MODULE_ENABLED){
-      DB.leads.filter(l=>l.salespersonId===u.id && l.fresh).forEach(l=>{
-        notify(u.id,'fresh_lead','You have a fresh lead: '+l.name,'leads','fresh_'+l.id);
-      });
-      DB.leads.filter(l=>l.salespersonId===u.id).forEach(l=>{
-        l.reminders.filter(r=>!r.done && r.date<=now()).forEach(r=>{
-          notify(u.id,'reminder','Reminder due for '+l.name+': '+r.text,'leads','reminder_'+r.id);
-        });
-      });
-    }
-    // Owner refresh reminders now apply PER Owner<->Unit relationship (its own 30-day cycle),
-    // not to the owner as a whole — reusing the same existing 25/30-day soon/expired rule.
-    ownerUnitsForSalesperson(u.id).forEach(rel=>{
-      const owner = DB.owners.find(o=>o.id===rel.ownerId);
-      if(!owner) return;
-      const unit = DB.units.find(x=>x.id===rel.unitId);
-      const unitLabel = unit ? unit.compound : 'a unit';
-      const st = ownerExpiryState(rel.lastUpdateAt);
-      const dayKey = Math.floor(rel.lastUpdateAt/86400000);
-      if(st==='soon') notify(u.id,'owner_refresh','Owner '+owner.name+' ('+unitLabel+') needs an update soon ('+daysBetween(rel.lastUpdateAt)+' days)','owners','relsoon_'+rel.id+'_'+dayKey);
-      if(st==='expired') notify(u.id,'owner_refresh','Owner '+owner.name+' ('+unitLabel+') has expired and may become available to others','owners','relexp_'+rel.id+'_'+dayKey);
-    });
-    // Daily Performance Report — if the salesperson has a report-able previous day (on/after the
-    // launch date) that was never completed, remind them and let them open it directly. The report
-    // does NOT lock after midnight — it stays fully editable/completable from this notification.
-    const today = (typeof effectiveTodayStr==='function') ? effectiveTodayStr() : todayStr();
-    const yesterday = previousDateStr(today);
-    if(isOnOrAfterLaunch(today) && isOnOrAfterLaunch(yesterday)){
-      const st = reportStatusOf(u.id, yesterday);
-      if(st!=='completed'){
-        notify(u.id,'daily_report_missing',"You didn't complete yesterday's Daily Report ("+yesterday+')','reports','drmiss_'+u.id+'_'+yesterday,{date:yesterday});
-      }
-    }
-  }
-  if(isAdmin(u)){
-    const pendingTransfers = DB.transfers.filter(t=>t.status==='pending');
-    pendingTransfers.forEach(t=> notify(u.id,'system','Owner transfer / claim request awaiting your approval','admin','transfer_'+t.id));
-  }
-  persist();
-}
+// Notifications are generated and stored by the SERVER (owner-refresh reminders, missing Daily
+// Report, admin approvals, transfers…). The browser no longer creates, stores or de-duplicates
+// them: it only fetches them (hydrateNotificationsFromServer in sync.js). Kept as a no-op so the
+// existing render() call site is unchanged.
+function syncNotifications(u){ /* server-owned — see sync.js */ }
 

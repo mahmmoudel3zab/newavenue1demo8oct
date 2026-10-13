@@ -50,9 +50,10 @@ AFTER_RENDER.myunits = function(u){
       `It will disappear from your normal inventory and My Units views. Its data, photos and owner relationships are kept safely and are NOT deleted — only a Head Admin can restore it.`
     );
     if(!ok) return;
-    softDeleteUnit(un, u.id);
-    log(u.id,'unit_soft_deleted',{unitId:un.id});
-    persist(); toast('Unit removed from your list'); renderPageInto(u);
+    NA1_API.del('/units/'+encodeURIComponent(un.id), { team: un.team }).then(async ()=>{
+      await hydrateOwnersAndUnitsFromServer(u);
+      toast('Unit removed from your list'); renderPageInto(u);
+    }).catch(e=> reportUnitWriteError(e, 'delete this unit'));
   }));
 };
 // Shared "leave with unsaved changes?" guard for the Add/Edit Unit forms (Part 2 / Part 6).
@@ -73,148 +74,246 @@ function wireUnsavedChangesGuard(fieldIds, closeBtnIds){
   closeBtnIds.forEach(id=>{ const el = document.getElementById(id); if(el) el.addEventListener('click', attemptClose); });
   return { markClean(){ dirty = false; }, markDirty(){ dirty = true; } };
 }
+/* ---------- Shared unit form (Add + Edit) ----------
+   Every business field is entered or chosen by the user — NOTHING is pre-filled with random or
+   demo values (no random city/area/size/bathrooms/delivery/finishing, no default prices).
+   Free-text fields (compound, developer, city, area) offer suggestions via <datalist> but accept
+   any typed value. Selects start on a "Select…" placeholder and are required. Validation runs
+   here (friendly toasts) AND again on the backend (routes/units.js), which is the real authority. */
+const DELIVERY_OPTIONS = [[0,'Immediate'],[1,'Within 1 year'],[2,'2 years'],[3,'3 years'],[4,'4 years'],[5,'5 years']];
+function unitFormFields(p, isRes, un){
+  const v = (k, d='') => (un && un[k] !== null && un[k] !== undefined) ? esc(String(un[k])) : d;
+  const unitTypes = isRes?UNIT_TYPES_RES:UNIT_TYPES_COM;
+  const sel = (id, label, opts, cur) => `<div class="field"><label class="field-label">${label}</label><select id="${p}_${id}"><option value="">Select…</option>${opts.map(o=>{ const val=Array.isArray(o)?o[0]:o, lab=Array.isArray(o)?o[1]:o; return `<option value="${esc(String(val))}" ${cur!==undefined&&cur!==null&&String(cur)===String(val)?'selected':''}>${esc(lab)}</option>`; }).join('')}</select></div>`;
+  const txt = (id, label, list, listId, cur, ph) => `<div class="field"><label class="field-label">${label}</label><input id="${p}_${id}" ${listId?`list="${p}_${listId}"`:''} value="${cur}" placeholder="${ph||''}" autocomplete="off">${listId?`<datalist id="${p}_${listId}">${list.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`:''}</div>`;
+  const num = (id, label, cur, min, ph) => `<div class="field"><label class="field-label">${label}</label><input id="${p}_${id}" type="number" min="${min}" value="${cur}" placeholder="${ph||''}"></div>`;
+  return `
+      ${txt('compound','Compound',(isRes?COMPOUNDS_RES:COMPOUNDS_COM),'cl',v('compound'),'e.g. compound name')}
+      ${txt('developer','Developer',(isRes?DEVELOPERS_RES:DEVELOPERS_COM),'dl',v('developer'),'e.g. developer name')}
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        ${txt('city','City',CITIES,'ct',v('city'),'')}
+        ${txt('area','Area',AREAS,'ar',v('area'),'')}
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        ${sel('type','Unit type',unitTypes,un&&un.unitType)}
+        ${sel('saleRent','Sale / Rent',['Sale','Rent'],un&&un.saleRent)}
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        ${num('size','Unit area (m²)',v('areaSize'),1,'')}
+        ${sel('finishing','Finishing',FINISHING,un&&un.finishing)}
+      </div>
+      <div style="display:grid; grid-template-columns:${isRes?'1fr 1fr':'1fr'}; gap:10px;">
+        ${isRes?num('bedrooms','Bedrooms',v('bedrooms'),0,''):''}
+        ${num('bathrooms','Bathrooms',v('bathrooms'),1,'')}
+      </div>
+      ${sel('delivery','Delivery',DELIVERY_OPTIONS,un?un.deliveryYears:undefined)}
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        ${num('total','Total price (EGP)',v('totalPrice'),1,'')}
+        ${num('dp','Down payment (EGP)',v('downPayment'),0,'')}
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        ${num('installments','Remaining installments (count)',v('remainingInstallments'),0,'0 if none')}
+        ${num('fees','Extra fees (EGP, optional)',v('extraFees','' ),0,'leave blank for none')}
+      </div>
+      <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-bottom:10px;"><input type="checkbox" id="${p}_furnished" ${un&&un.furnished?'checked':''}> Furnished</label>`;
+}
+const UNIT_FORM_IDS = (p,isRes)=> ['compound','developer','city','area','type','saleRent','size','finishing',...(isRes?['bedrooms']:[]),'bathrooms','delivery','total','dp','installments','fees','furnished'].map(x=>p+'_'+x);
+// Reads + validates the shared form. Returns {error} or {body}. Blank required numbers are
+// rejected (a blank is never silently turned into 0 or a random value).
+function readUnitForm(p, isRes, team){
+  const g = id => document.getElementById(p+'_'+id);
+  const text = id => (g(id).value||'').trim();
+  const numOrNull = id => { const raw = (g(id).value||'').trim(); if(raw==='') return null; const n = Number(raw); return Number.isFinite(n) ? n : NaN; };
+  const compound=text('compound'), developer=text('developer'), city=text('city'), area=text('area');
+  if(!compound) return {error:'Compound is required'};
+  if(!developer) return {error:'Developer is required'};
+  if(!city) return {error:'City is required'};
+  if(!area) return {error:'Area is required'};
+  if(compound.length>150||developer.length>150||city.length>150||area.length>150) return {error:'Compound, developer, city and area must be 150 characters or fewer'};
+  const unitType=text('type'); if(!unitType) return {error:'Select a unit type'};
+  const saleRent=text('saleRent'); if(!saleRent) return {error:'Select Sale or Rent'};
+  const size=numOrNull('size'); if(size===null||!(size>0)) return {error:'Enter a valid unit area (greater than 0)'};
+  const finishing=text('finishing'); if(!finishing) return {error:'Select the finishing'};
+  let bedrooms=null;
+  if(isRes){ const b=numOrNull('bedrooms'); if(b===null||!Number.isInteger(b)||b<0) return {error:'Enter the number of bedrooms (a whole number, 0 or more)'}; bedrooms=b; }
+  const baths=numOrNull('bathrooms'); if(baths===null||!Number.isInteger(baths)||baths<1) return {error:'Enter the number of bathrooms (a whole number, at least 1)'};
+  const delRaw=text('delivery'); if(delRaw==='') return {error:'Select the delivery'};
+  const delivery=Number(delRaw);
+  const total=numOrNull('total'); if(total===null||!(total>0)) return {error:'Enter a valid total price (greater than 0)'};
+  const dp=numOrNull('dp'); if(dp===null||Number.isNaN(dp)||dp<0) return {error:'Enter the down payment (0 or more)'};
+  if(dp>total) return {error:'Down payment cannot exceed the total price'};
+  const inst=numOrNull('installments'); if(inst===null||!Number.isInteger(inst)||inst<0) return {error:'Enter the remaining installments (a whole number, 0 or more)'};
+  const fees=numOrNull('fees'); if(Number.isNaN(fees)||(fees!==null&&fees<0)) return {error:'Extra fees must be a number, 0 or more'};
+  return {body:{ team, compound, developer, city, area, unitType, saleRent, areaSize:size, finishing, bedrooms, bathrooms:baths,
+    deliveryYears:delivery, totalPrice:total, downPayment:dp, remainingAmount:Math.max(total-dp,0), remainingInstallments:inst,
+    extraFees: fees===null?0:fees, furnished: g('furnished').checked }};
+}
+/* ---------- Photo picker (Module F) ----------
+   Real image upload for the Add / Edit Unit forms. Each chosen picture is re-encoded in the browser
+   (smaller, metadata removed) and uploaded to the server right away as a private "staged" photo; the
+   unit form's Save then sends the ordered list of photo ids and the SERVER attaches them in the same
+   step that saves the unit. Photos can be reordered (◀ ▶) and removed before saving; nothing about
+   them is stored in the browser — only on the server. */
+const PHOTO_MIN = 3, PHOTO_MAX = 12;
+function photoPickerHTML(prefix, legacyCount){
+  return `<div class="field"><label class="field-label">Photos — at least ${PHOTO_MIN}, up to ${PHOTO_MAX}</label>
+    <div class="pp-bar">
+      <button class="btn btn-sm" id="${prefix}PhotoAddBtn" type="button">${ic('plus')} Add photos</button>
+      <input type="file" id="${prefix}PhotoInput" accept="${PHOTO_ACCEPT}" multiple style="display:none;">
+      <span id="${prefix}PhotoStatus" class="pp-status"></span>
+    </div>
+    <div class="pp-grid" id="${prefix}PhotoGrid"></div>
+    <div class="pp-hint">JPEG, PNG or WebP. The first photo is the cover. Pictures are resized automatically and kept privately on the company server.</div>
+    ${legacyCount ? `<div class="pp-legacy" id="${prefix}PhotoLegacy">This unit was created before real uploads and only has a photo <em>count</em> (${legacyCount}); there are no pictures on file yet. Upload real photos to replace it — or leave this empty to save other changes.</div>` : ''}
+  </div>`;
+}
+// initialIds = photo ids already saved on the unit (edit); returns a controller.
+function wirePhotoPicker(prefix, initialIds, onChange){
+  const items = (initialIds||[]).map(id=>({key:'e'+id, id, state:'done', thumb:true, saved:true}));
+  let seq = 0, destroyed = false;
+  const grid = document.getElementById(prefix+'PhotoGrid'), status = document.getElementById(prefix+'PhotoStatus');
+  const input = document.getElementById(prefix+'PhotoInput');
+  function draw(){
+    if(destroyed || !grid) return;
+    grid.innerHTML = items.map((it,i)=>`<div class="pp-tile ${it.state==='error'?'pp-err':''}" data-pp="${it.key}">
+      ${it.preview ? `<img src="${it.preview}" alt="Photo ${i+1}">` : (it.id ? `<img data-photo-id="${it.id}" data-photo-size="thumb" data-photo-eager alt="Photo ${i+1}">` : '')}
+      <span class="pp-num">${i===0?'Cover':(i+1)}</span>
+      ${it.state==='uploading' ? '<div class="pp-over">Uploading…</div>' : ''}
+      ${it.state==='error' ? `<div class="pp-over pp-over-err">${esc(it.error||'Failed')}</div>` : ''}
+      <button type="button" class="pp-x" data-ppdel="${it.key}" aria-label="Remove photo ${i+1}">×</button>
+      <div class="pp-move">
+        <button type="button" data-ppleft="${it.key}" ${i===0?'disabled':''} aria-label="Move earlier">◀</button>
+        <button type="button" data-ppright="${it.key}" ${i===items.length-1?'disabled':''} aria-label="Move later">▶</button>
+      </div></div>`).join('');
+    const ok = items.filter(x=>x.state==='done').length, busy = items.filter(x=>x.state==='uploading').length;
+    status.textContent = items.length ? `${ok} photo${ok===1?'':'s'} ready${busy?` · ${busy} uploading…`:''}` : 'No photos yet';
+    grid.querySelectorAll('[data-ppdel]').forEach(b=> b.addEventListener('click', ()=> remove(b.dataset.ppdel)));
+    grid.querySelectorAll('[data-ppleft]').forEach(b=> b.addEventListener('click', ()=> move(b.dataset.ppleft, -1)));
+    grid.querySelectorAll('[data-ppright]').forEach(b=> b.addEventListener('click', ()=> move(b.dataset.ppright, 1)));
+    if(typeof hydratePhotoImages==='function') hydratePhotoImages(grid);
+  }
+  function move(key, d){ const i = items.findIndex(x=>x.key===key), j = i+d; if(i<0||j<0||j>=items.length) return; const t = items[i]; items[i] = items[j]; items[j] = t; draw(); onChange&&onChange(); }
+  function remove(key){
+    const i = items.findIndex(x=>x.key===key); if(i<0) return;
+    const [it] = items.splice(i,1);
+    if(it.preview) try{ URL.revokeObjectURL(it.preview); }catch(e){}
+    // A photo uploaded in this form and never saved is discarded on the server right away (best effort).
+    if(it.id && !it.saved) NA1_API.del('/unit-photos/'+encodeURIComponent(it.id)).catch(()=>{});
+    draw(); onChange&&onChange();
+  }
+  async function addFiles(files){
+    const list = Array.from(files||[]);
+    const room = PHOTO_MAX - items.length;
+    if(list.length > room){ toast(room>0 ? `Only ${room} more photo${room===1?'':'s'} fit (maximum ${PHOTO_MAX}) — extra pictures were skipped` : `Maximum ${PHOTO_MAX} photos per unit`); }
+    const take = list.slice(0, Math.max(room,0));
+    const fresh = take.map(f=>({key:'n'+(++seq), file:f, state:'uploading'}));
+    fresh.forEach(it=>{ const why = checkPhotoFile(it.file); if(why){ it.state='error'; it.error=why; } });
+    items.push(...fresh); draw(); onChange&&onChange();
+    let next = 0;
+    const worker = async ()=>{
+      while(next < fresh.length){
+        const it = fresh[next++]; if(it.state!=='uploading') continue;
+        try {
+          const r = await uploadUnitPhoto(it.file);
+          if(!items.includes(it)){ NA1_API.del('/unit-photos/'+encodeURIComponent(r.id)).catch(()=>{}); try{ URL.revokeObjectURL(r.previewUrl); }catch(e){} continue; }   // removed while uploading
+          it.id = r.id; it.preview = r.previewUrl; it.state = 'done'; delete it.file;
+        } catch(e){
+          it.state = 'error'; it.error = (e && e.message) ? e.message : 'Upload failed';
+          if(e && e.isNetworkError) it.error = 'No connection';
+        }
+        draw(); onChange&&onChange();
+      }
+    };
+    await Promise.all([worker(), worker()]);
+  }
+  document.getElementById(prefix+'PhotoAddBtn').addEventListener('click', ()=> input.click());
+  input.addEventListener('change', ()=>{ const f = Array.from(input.files||[]); input.value=''; if(f.length) addFiles(f); });
+  draw();
+  return {
+    ids: ()=> items.filter(x=>x.state==='done').map(x=>x.id),
+    busy: ()=> items.some(x=>x.state==='uploading'),
+    failed: ()=> items.filter(x=>x.state==='error').length,
+    total: ()=> items.length,
+    addFiles,
+    destroy(){ destroyed = true; items.forEach(it=>{ if(it.preview) try{ URL.revokeObjectURL(it.preview); }catch(e){} }); },
+  };
+}
+// Checks the picker before saving. Returns an error string or null.
+function photoPickerProblem(pk, {legacyOk}){
+  if(pk.busy()) return 'Please wait — photos are still uploading';
+  if(pk.failed()) return 'Remove the photos that failed to upload (or add them again) before saving';
+  const n = pk.ids().length;
+  if(n===0 && legacyOk) return null;
+  if(n < PHOTO_MIN) return `Add at least ${PHOTO_MIN} photos before saving (you have ${n})`;
+  return null;
+}
+
 function openAddUnitModal(u){
   const tk = myTeamKey(u);
   const isRes = tk==='residential';
-  const unitTypes = isRes?UNIT_TYPES_RES:UNIT_TYPES_COM;
-  session._newUnitPhotos = 0;
   openModal(`
     <div class="modal-head"><div style="font-weight:800;">Add new unit</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
     <div class="modal-body">
-      <div class="field"><label class="field-label">Compound</label><input id="nu_compound" value="${esc(pick(isRes?COMPOUNDS_RES:COMPOUNDS_COM))}"></div>
-      <div class="field"><label class="field-label">Developer</label><input id="nu_developer" value="${esc(pick(isRes?DEVELOPERS_RES:DEVELOPERS_COM))}"></div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="field"><label class="field-label">Unit type</label><select id="nu_type">${unitTypes.map(t=>`<option>${t}</option>`).join('')}</select></div>
-        <div class="field"><label class="field-label">Sale / Rent</label><select id="nu_saleRent"><option>Sale</option><option>Rent</option></select></div>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="field"><label class="field-label">Total price (EGP)</label><input id="nu_total" type="number" value="4500000"></div>
-        <div class="field"><label class="field-label">Down payment (EGP)</label><input id="nu_dp" type="number" value="900000"></div>
-      </div>
-      <div class="field"><label class="field-label">Photos — add at least 3</label>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn btn-sm" id="addPhotoBtn" type="button">${ic('plus')} Add photo</button>
-          <span id="photoCount" style="font-size:12px; color:var(--text-faint);">0 photos added</span>
-        </div>
-      </div>
+      ${unitFormFields('nu', isRes, null)}
+      ${photoPickerHTML('nu', 0)}
     </div>
     <div class="modal-foot">
       <button class="btn" id="cancelAddUnitBtn">Cancel</button>
       <button class="btn btn-primary" id="saveUnitBtn">Submit unit</button>
     </div>`, {noBackdropClose:true});
-  const guard = wireUnsavedChangesGuard(
-    ['nu_compound','nu_developer','nu_type','nu_saleRent','nu_total','nu_dp'],
-    ['modalCloseX','cancelAddUnitBtn']
-  );
-  document.getElementById('addPhotoBtn').addEventListener('click', ()=>{ session._newUnitPhotos++; document.getElementById('photoCount').textContent = session._newUnitPhotos+' photos added'; guard.markDirty(); });
-  document.getElementById('saveUnitBtn').addEventListener('click', ()=>{
-    if(session._newUnitPhotos<3){ toast('Add at least 3 photos before submitting'); return; }
-    const total = Number(document.getElementById('nu_total').value)||0;
-    const dp = Number(document.getElementById('nu_dp').value)||0;
-    if(total<=0){ toast('Enter a valid total price'); return; }
-    if(dp<0 || dp>total){ toast('Down payment must be between 0 and the total price'); return; }
-    const newUnit = {
-      id: uid('u'), team: tk, pending:true,
-      compound: document.getElementById('nu_compound').value || 'Untitled Compound',
-      phase:'Phase 1', developer: document.getElementById('nu_developer').value,
-      city: pick(CITIES), area: pick(AREAS), saleRent: document.getElementById('nu_saleRent').value,
-      unitType: document.getElementById('nu_type').value,
-      areaSize: rndInt(90,300), garden:0, roof:0,
-      bedrooms: isRes?rndInt(1,4):null, bathrooms: rndInt(1,3),
-      deliveryYears: pick([0,1,2]),
-      downPayment: dp, remainingAmount: Math.max(total-dp,0), remainingInstallments: 36,
-      totalPrice: total, extraFees: Math.round(total*0.03), finishing: pick(FINISHING), furnished:false,
-      photos: session._newUnitPhotos, ownerSalespersonId: u.id, createdAt: now(), updatedAt: now(),
-      deletedAt: null, deletedBy: null,
-      views:[], calls:[], whatsapps:[], pdfs:[]
-    };
-    DB.units.push(newUnit);
-    log(u.id,'unit_created',{unitId:newUnit.id});
-    guard.markClean();
-    persist(); closeModal(); toast('Unit added — visible now, pending admin review'); renderPageInto(u);
+  const guard = wireUnsavedChangesGuard(UNIT_FORM_IDS('nu',isRes), ['modalCloseX','cancelAddUnitBtn']);
+  const pk = wirePhotoPicker('nu', [], ()=> guard.markDirty());
+  document.getElementById('saveUnitBtn').addEventListener('click', async ()=>{
+    const r = readUnitForm('nu', isRes, tk);
+    if(r.error){ toast(r.error); return; }
+    const pp = photoPickerProblem(pk, {legacyOk:false}); if(pp){ toast(pp); return; }
+    const body = Object.assign(r.body, { photoIds: pk.ids() });
+    const btn = document.getElementById('saveUnitBtn'); btn.disabled = true;
+    try {
+      await NA1_API.post('/units', body);
+    } catch(e){ btn.disabled = false; reportUnitWriteError(e, 'save this unit'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    guard.markClean(); pk.destroy();
+    closeModal(); toast('Unit added — visible now, pending admin review'); renderPageInto(u);
   });
 }
 
 /* ---------- PART 2: Edit Unit (from My Units) ----------
-   Reuses the same field set/layout as "Add new unit" above, pre-filled with the unit's current
-   values. Saving updates the SAME unit record in place (never creates a new one) and never
-   touches its ownerSalespersonId/team/pending/interaction-history/photos-beyond-count or any
-   owner relationship that references it — only the fields actually shown here can change.
-   Backend ownership/editing permission is mirrored here: only the unit's own salesperson may
-   open this modal (see the data-editunit handler in AFTER_RENDER.myunits above), and this
-   frontend check is a demo-level guard only — the same caveat already documented for every
-   other permission check in this prototype; real enforcement belongs server-side. */
+   Same fields/validation as Add, pre-filled with the unit's saved values. Saving updates the SAME
+   unit record (PATCH) and never touches ownerSalespersonId/team/pending/interaction history or any
+   owner relationship. Ownership is enforced by the backend (403 for anyone else); the check below
+   is only a courtesy. */
 function openEditUnitModal(unitId, u){
   const un = DB.units.find(x=>x.id===unitId);
   if(!un || un.deletedAt){ toast('This unit is no longer available.'); return; }
   if(un.ownerSalespersonId!==u.id){ toast('You can only edit units that belong to you'); return; }
   const isRes = un.team==='residential';
-  const unitTypes = isRes?UNIT_TYPES_RES:UNIT_TYPES_COM;
-  session._editUnitPhotos = un.photos;
+  const legacyOnly = !(un.photoIds && un.photoIds.length);
   openModal(`
     <div class="modal-head"><div style="font-weight:800;">Edit unit — ${esc(un.compound)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
     <div class="modal-body">
-      <div class="field"><label class="field-label">Compound</label><input id="eu2_compound" value="${esc(un.compound)}"></div>
-      <div class="field"><label class="field-label">Developer</label><input id="eu2_developer" value="${esc(un.developer)}"></div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="field"><label class="field-label">Unit type</label><select id="eu2_type">${unitTypes.map(t=>`<option ${t===un.unitType?'selected':''}>${t}</option>`).join('')}</select></div>
-        <div class="field"><label class="field-label">Sale / Rent</label><select id="eu2_saleRent"><option ${un.saleRent==='Sale'?'selected':''}>Sale</option><option ${un.saleRent==='Rent'?'selected':''}>Rent</option></select></div>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="field"><label class="field-label">Total price (EGP)</label><input id="eu2_total" type="number" value="${un.totalPrice}"></div>
-        <div class="field"><label class="field-label">Down payment (EGP)</label><input id="eu2_dp" type="number" value="${un.downPayment}"></div>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="field"><label class="field-label">Area size (m²)</label><input id="eu2_area" type="number" min="1" value="${un.areaSize}"></div>
-        <div class="field"><label class="field-label">Finishing</label><select id="eu2_finishing">${FINISHING.map(f=>`<option ${f===un.finishing?'selected':''}>${f}</option>`).join('')}</select></div>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        ${isRes?`<div class="field"><label class="field-label">Bedrooms</label><input id="eu2_bedrooms" type="number" min="0" value="${un.bedrooms!=null?un.bedrooms:0}"></div>`:''}
-        <div class="field"><label class="field-label">Bathrooms</label><input id="eu2_bathrooms" type="number" min="1" value="${un.bathrooms}"></div>
-      </div>
-      <div class="field"><label class="field-label">Photos — at least 3</label>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn btn-sm" id="eu2AddPhotoBtn" type="button">${ic('plus')} Add photo</button>
-          <span id="eu2PhotoCount" style="font-size:12px; color:var(--text-faint);">${un.photos} photos</span>
-        </div>
-      </div>
+      ${unitFormFields('eu', isRes, un)}
+      ${photoPickerHTML('eu', legacyOnly ? un.photos : 0)}
     </div>
     <div class="modal-foot">
       <button class="btn" id="cancelEditUnitBtn">Cancel</button>
       <button class="btn btn-primary" id="saveEditUnitBtn">Save changes</button>
     </div>`, {noBackdropClose:true});
-  const guard = wireUnsavedChangesGuard(
-    ['eu2_compound','eu2_developer','eu2_type','eu2_saleRent','eu2_total','eu2_dp','eu2_area','eu2_finishing','eu2_bedrooms','eu2_bathrooms'],
-    ['modalCloseX','cancelEditUnitBtn']
-  );
-  document.getElementById('eu2AddPhotoBtn').addEventListener('click', ()=>{ session._editUnitPhotos++; document.getElementById('eu2PhotoCount').textContent = session._editUnitPhotos+' photos'; guard.markDirty(); });
-  document.getElementById('saveEditUnitBtn').addEventListener('click', ()=>{
-    if(session._editUnitPhotos<3){ toast('At least 3 photos are required'); return; }
-    const total = Number(document.getElementById('eu2_total').value)||0;
-    const dp = Number(document.getElementById('eu2_dp').value)||0;
-    if(total<=0){ toast('Enter a valid total price'); return; }
-    if(dp<0 || dp>total){ toast('Down payment must be between 0 and the total price'); return; }
-    const compound = document.getElementById('eu2_compound').value.trim();
-    const developer = document.getElementById('eu2_developer').value.trim();
-    if(!compound){ toast('Compound is required'); return; }
-    if(!developer){ toast('Developer is required'); return; }
-    const area = Number(document.getElementById('eu2_area').value)||0;
-    if(area<=0){ toast('Enter a valid area size'); return; }
-    const bathrooms = Number(document.getElementById('eu2_bathrooms').value)||0;
-    if(bathrooms<=0){ toast('Enter a valid number of bathrooms'); return; }
-    un.compound = compound; un.developer = developer;
-    un.unitType = document.getElementById('eu2_type').value;
-    un.saleRent = document.getElementById('eu2_saleRent').value;
-    un.totalPrice = total; un.downPayment = dp; un.remainingAmount = Math.max(total-dp,0);
-    un.areaSize = area;
-    un.finishing = document.getElementById('eu2_finishing').value;
-    if(isRes){ const bd = document.getElementById('eu2_bedrooms'); if(bd) un.bedrooms = Math.max(0, Number(bd.value)||0); }
-    un.bathrooms = bathrooms;
-    un.photos = session._editUnitPhotos;
-    un.updatedAt = now();
-    guard.markClean();
-    log(u.id,'unit_edited',{unitId:un.id});
-    persist(); closeModal(); toast('Unit updated'); renderPageInto(u);
+  const guard = wireUnsavedChangesGuard(UNIT_FORM_IDS('eu',isRes), ['modalCloseX','cancelEditUnitBtn']);
+  const pk = wirePhotoPicker('eu', un.photoIds||[], ()=> guard.markDirty());
+  document.getElementById('saveEditUnitBtn').addEventListener('click', async ()=>{
+    const r = readUnitForm('eu', isRes, un.team);
+    if(r.error){ toast(r.error); return; }
+    const pp = photoPickerProblem(pk, {legacyOk: legacyOnly}); if(pp){ toast(pp); return; }
+    const body = r.body;
+    // Legacy count-only unit with nothing uploaded: leave its photos alone (other edits still save).
+    if(pk.ids().length) body.photoIds = pk.ids();
+    const btn = document.getElementById('saveEditUnitBtn'); btn.disabled = true;
+    try {
+      await NA1_API.patch('/units/'+encodeURIComponent(un.id), body);
+    } catch(e){ btn.disabled = false; reportUnitWriteError(e, 'save changes to this unit'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    guard.markClean(); pk.destroy();
+    closeModal(); toast('Unit updated'); renderPageInto(u);
   });
 }
-

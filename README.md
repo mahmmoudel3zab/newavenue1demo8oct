@@ -15,11 +15,11 @@ can open it on your laptop and your phone at the same time.
 
 ## 1. What you need installed
 
-- **Node.js** (version 16 or newer) — this is the *only* requirement, and it's only needed to
+- **Node.js** (the frontend server itself runs on 16+, but the whole project - backend included - needs **Node.js 22 or 24 LTS**; see `../WINDOWS_SETUP.md`) — this is the *only* requirement, and it's only needed to
   run the local server / LAN access. If you don't have it: go to **https://nodejs.org**, download
   the "LTS" version, and install it like any other program (Next → Next → Finish).
 - Any modern web browser (Chrome, Safari, Edge, Firefox) on your laptop and/or phone.
-- No internet connection is required to run the app itself. (The two fonts — Fraunces and
+- No internet connection is required to run the app itself. (The two fonts — Bodoni Moda and
   Manrope — load from Google Fonts if you're online; if you're offline, the app automatically
   falls back to your system's default fonts and looks almost identical.)
 
@@ -69,7 +69,9 @@ You'll see something like this in the terminal:
 
 To stop the server, click back into the terminal and press `Ctrl + C`.
 
-> **Didn't want to install Node.js at all?** You can also just double-click `index.html` inside
+> **Important:** the app now signs in against the backend API. Opening `index.html` by double-click (a `file://` page) cannot sign in, because the backend refuses that origin. Use `start-windows.cmd` / `node server.js` and open http://localhost:3000.
+>
+> **Didn't want to install Node.js at all?** (UI preview only, no sign-in) You can also just double-click `index.html` inside
 > the folder to open the app straight in your browser. This works for trying it out on one
 > computer, but your phone won't be able to reach it this way, and a couple of address-bar
 > conveniences (like the "open in new tab" links) behave slightly better when served properly —

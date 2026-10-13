@@ -99,7 +99,9 @@ function filterGroup(label, key, opts, selected){
 function unitCard(un){
   const sp = DB.users.find(x=>x.id===un.ownerSalespersonId);
   return `<div class="card unit-card" data-unit="${un.id}">
-    <div class="scrim-photo uc-photo">${un.photos} photos</div>
+    ${(un.photoIds&&un.photoIds.length)
+      ? `<div class="scrim-photo uc-photo uc-photo-real"><img data-photo-id="${un.photoIds[0]}" data-photo-size="thumb" alt="${esc(un.compound)}"><span class="uc-photo-count">${ic('area')} ${un.photoIds.length}</span></div>`
+      : `<div class="scrim-photo uc-photo">${un.photos} photos</div>`}
     <div class="card-pad uc-body">
       <div class="uc-toprow">
         <div class="uc-title">${esc(un.compound)}</div>
@@ -156,10 +158,16 @@ AFTER_RENDER.inventory = function(u){
   document.querySelectorAll('.unit-card').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
 };
 
+// Interactions are recorded by the backend (unique per unit+user+type, so repeat clicks add no
+// extra weight). The local array is updated optimistically ONLY for instant UI feedback; a failure
+// is logged, never hidden. Popularity is re-read from the server on the next hydration.
+const _INTERACTION_API_TYPE = { views:'view', calls:'call', whatsapps:'whatsapp', pdfs:'pdf' };
 function recordInteraction(un, u, type){
   const arr = un[type];
-  if(!arr.includes(u.id)) arr.push(u.id); // unique-user dedup prevents self-manipulation
-  persist();
+  if(arr.includes(u.id)) return; // unique-user dedup prevents self-manipulation
+  arr.push(u.id);
+  NA1_API.post('/units/'+encodeURIComponent(un.id)+'/interactions', { type: _INTERACTION_API_TYPE[type], team: un.team })
+    .catch(e=> console.warn('Could not record unit interaction on the server', e));
 }
 function openUnitModal(unitId, u){
   const un = DB.units.find(x=>x.id===unitId);
@@ -174,7 +182,9 @@ function openUnitModal(unitId, u){
     </div>
     <div class="modal-body">
       <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:14px;">
-        ${Array.from({length:Math.min(un.photos,6)}).map((_,i)=>`<div class="scrim-photo">Photo ${i+1}</div>`).join('')}
+        ${(un.photoIds&&un.photoIds.length)
+          ? un.photoIds.map((id,i)=>`<div class="scrim-photo gal-thumb" data-galidx="${i}" role="button" tabindex="0" aria-label="Open photo ${i+1}"><img data-photo-id="${id}" data-photo-size="thumb" alt="Photo ${i+1}"></div>`).join('')
+          : Array.from({length:Math.min(un.photos,6)}).map((_,i)=>`<div class="scrim-photo">Photo ${i+1}</div>`).join('')}
       </div>
       ${un.pending?'<div class="badge badge-pending" style="margin-bottom:10px;">Pending admin review</div>':''}
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;">
@@ -204,8 +214,12 @@ function openUnitModal(unitId, u){
       <button class="btn btn-primary btn-sm" id="unitPdfBtn">${ic('pdf')} Create PDF</button>
     </div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
+  if(!spRef){
+    ['unitWaBtn','unitCallBtn'].forEach(id=>{ const el=document.getElementById(id); el.setAttribute('aria-disabled','true'); el.style.opacity='.5'; el.addEventListener('click', e=>{ e.preventDefault(); e.stopImmediatePropagation(); toast('No contact details on file for this representative'); }); });
+  }
   document.getElementById('unitWaBtn').addEventListener('click', ()=>{ recordInteraction(un,u,'whatsapps'); toast('Opening WhatsApp chat with '+(sp?sp.name:'agent')+'…'); });
   document.getElementById('unitCallBtn').addEventListener('click', ()=>{ recordInteraction(un,u,'calls'); toast('Dialing '+(sp?sp.name:'agent')+'…'); });
+  document.querySelectorAll('.gal-thumb').forEach(el=>{ const open=()=>openPhotoViewer(un.photoIds, Number(el.dataset.galidx)); el.addEventListener('click', open); el.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } }); });
   document.getElementById('unitPdfBtn').addEventListener('click', ()=>{ recordInteraction(un,u,'pdfs'); openUnitPdfPreview(un,sp); });
 }
 
@@ -213,10 +227,18 @@ function openUnitModal(unitId, u){
    Unit PDF / Property Sheet — a premium, branded New Avenue sheet suitable for sending to
    clients (WhatsApp, print, internal use), not a plain browser printout.
    ========================================================= */
-function unitSheetHTML(un, sp){
+function unitSheetHTML(un, sp, dataUrls){
   const photoCount = Math.min(un.photos, 5);
-  const heroPhoto = `<div class="ns-hero-photo">${ic('area')}<span>${un.photos} photo${un.photos===1?'':'s'} on file</span></div>`;
-  const stripPhotos = Array.from({length:Math.max(photoCount-1,0)}).map((_,i)=>`<div class="ns-thumb">Photo ${i+2}</div>`).join('');
+  // Real photos when the unit has them (dataUrls = already-downloaded images for the printable
+  // window; without it the modal preview loads them through the normal authenticated loader).
+  const ids = un.photoIds || [];
+  const imgTag = (id, size, alt)=> dataUrls ? (dataUrls[id+'|'+size] ? `<img src="${dataUrls[id+'|'+size]}" alt="${alt}">` : '') : `<img data-photo-id="${id}" data-photo-size="${size}" alt="${alt}">`;
+  const heroPhoto = ids.length
+    ? `<div class="ns-hero-photo ns-hero-real">${imgTag(ids[0],'full','Main photo')}</div>`
+    : `<div class="ns-hero-photo">${ic('area')}<span>${un.photos} photo${un.photos===1?'':'s'} on file</span></div>`;
+  const stripPhotos = ids.length
+    ? ids.slice(1,5).map((id,i)=>`<div class="ns-thumb">${imgTag(id,'thumb','Photo '+(i+2))}</div>`).join('')
+    : Array.from({length:Math.max(photoCount-1,0)}).map((_,i)=>`<div class="ns-thumb">Photo ${i+2}</div>`).join('');
   const specs = [
     un.bedrooms!=null ? ['bed','Bedrooms', un.bedrooms] : null,
     ['bath','Bathrooms', un.bathrooms],
@@ -232,8 +254,9 @@ function unitSheetHTML(un, sp){
     ['Phase', un.phase],
   ].filter(Boolean);
   const ref = sp ? DB.refs.find(r=>r.userId===sp.id) : null;
-  const spPhone = ref ? ref.phone : '0100000000';
-  const spWa = ref ? ref.whatsapp : '0100000000';
+  // No invented numbers: if the representative has no directory entry the sheet says so.
+  const spPhone = ref ? ref.phone : 'contact details not on file';
+  const spWa = ref ? ref.whatsapp : 'not on file';
 
   return `
   <div class="ns-sheet">
@@ -291,6 +314,9 @@ const UNIT_SHEET_CSS = `
   .ns-hero{display:flex; gap:16px; padding:22px 28px 10px;}
   .ns-hero-photo{flex:0 0 150px; height:120px; border-radius:10px; background:linear-gradient(135deg,#E4E0D6,#F1E9DA); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:#95937F; font-size:10.5px; font-weight:700;}
   .ns-hero-photo svg{width:26px;height:26px;}
+  .ns-hero-real{padding:0; overflow:hidden; background:#EDEAE2; flex:0 0 190px; height:140px;}
+  .ns-hero-real img,.ns-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  .ns-thumb{overflow:hidden;}
   .ns-hero-info{flex:1; min-width:0;}
   .ns-tag{display:inline-block; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:#8A6A3B; background:#F1E9DA; padding:3px 9px; border-radius:20px; margin-bottom:6px;}
   .ns-hero-info h1{font-family:Georgia,serif; font-size:23px; font-weight:700; margin:0 0 4px; color:#20211E; line-height:1.15;}
@@ -333,10 +359,19 @@ function openUnitPdfPreview(un, sp){
       <button class="btn btn-primary btn-sm" id="printPdfBtn">${ic('pdf')} Print / Save as PDF</button>
     </div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
-  document.getElementById('printPdfBtn').addEventListener('click', ()=>{
+  document.getElementById('printPdfBtn').addEventListener('click', async ()=>{
     const w = window.open('', '_blank');
-    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>New Avenue — '+esc(un.compound)+'</title><style>'+UNIT_SHEET_CSS+'</style></head><body>'+unitSheetHTML(un,sp)+'</body></html>');
-    w.document.close(); w.focus(); setTimeout(()=>w.print(), 300);
+    if(!w){ toast('Allow pop-ups to print or save the sheet'); return; }
+    // The new window cannot log in, so the photos are embedded as data: URLs before printing.
+    const dataUrls = {};
+    const ids = un.photoIds || [];
+    try {
+      await Promise.all([[ids[0],'full'], ...ids.slice(1,5).map(id=>[id,'thumb'])].filter(x=>x[0]).map(async ([id,size])=>{ dataUrls[id+'|'+size] = await photoDataUrl(id, size); }));
+    } catch(e){ toast('Some photos could not be loaded — the sheet will print without them'); }
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>New Avenue — '+esc(un.compound)+'</title><style>'+UNIT_SHEET_CSS+'</style></head><body>'+unitSheetHTML(un,sp,dataUrls)+'</body></html>');
+    w.document.close(); w.focus();
+    const imgs = Array.from(w.document.images);
+    Promise.all(imgs.map(im=> im.complete ? 0 : new Promise(r=>{ im.onload = im.onerror = r; }))).then(()=> setTimeout(()=>w.print(), 200));
   });
   document.getElementById('pdfWaShareBtn').addEventListener('click', (e)=>{
     e.preventDefault();
@@ -345,3 +380,34 @@ function openUnitPdfPreview(un, sp){
   });
 }
 
+
+
+/* ---------- Full-size photo viewer (Module F) ---------- */
+function openPhotoViewer(ids, start){
+  if(!ids || !ids.length) return;
+  let idx = Math.min(Math.max(start||0,0), ids.length-1);
+  const ov = document.createElement('div'); ov.className='pv-overlay'; ov.id='photoViewer';
+  ov.innerHTML = `<button class="pv-close" id="pvClose" aria-label="Close">×</button>
+    <button class="pv-nav pv-prev" id="pvPrev" aria-label="Previous photo">‹</button>
+    <img id="pvImg" alt="">
+    <button class="pv-nav pv-next" id="pvNext" aria-label="Next photo">›</button>
+    <div class="pv-count" id="pvCount"></div>`;
+  document.body.appendChild(ov);
+  const img = ov.querySelector('#pvImg');
+  function show(){
+    ov.querySelector('#pvCount').textContent = (idx+1)+' / '+ids.length;
+    ov.querySelector('#pvPrev').style.visibility = ids.length>1 ? 'visible' : 'hidden';
+    ov.querySelector('#pvNext').style.visibility = ids.length>1 ? 'visible' : 'hidden';
+    img.removeAttribute('src'); img.alt = 'Photo '+(idx+1);
+    const want = idx;
+    photoUrl(ids[idx], 'full').then(url=>{ if(want===idx && url) img.src = url; else if(want===idx) img.alt = 'Photo unavailable'; });
+  }
+  function close(){ document.removeEventListener('keydown', onKey); ov.remove(); }
+  function onKey(e){ if(e.key==='Escape') close(); else if(e.key==='ArrowRight'){ idx=(idx+1)%ids.length; show(); } else if(e.key==='ArrowLeft'){ idx=(idx-1+ids.length)%ids.length; show(); } }
+  ov.querySelector('#pvClose').addEventListener('click', close);
+  ov.querySelector('#pvPrev').addEventListener('click', ()=>{ idx=(idx-1+ids.length)%ids.length; show(); });
+  ov.querySelector('#pvNext').addEventListener('click', ()=>{ idx=(idx+1)%ids.length; show(); });
+  ov.addEventListener('click', e=>{ if(e.target===ov) close(); });
+  document.addEventListener('keydown', onKey);
+  show();
+}

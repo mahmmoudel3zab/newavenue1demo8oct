@@ -4,7 +4,7 @@
 function renderRequestsPage(u){
   const tk = myTeamKey(u);
   const list = requestsFor(tk);
-  const pos = DB.readPositions[u.id];
+  const pos = DB.requestRead[tk];
   const idx = pos ? list.findIndex(r=>r.id===pos) : -1;
   const unreadStart = idx+1;
   const hasUnread = unreadStart < list.length;
@@ -50,20 +50,39 @@ AFTER_RENDER.requests = function(u){
   const tk = myTeamKey(u);
   const list = requestsFor(tk);
   const scroll = document.getElementById('reqScroll');
-  const markRead = ()=>{ if(list.length){ DB.readPositions[u.id] = list[list.length-1].id; persist(); } };
+  // The read position is stored on the SERVER (personal, per team feed, forward-only).
+  const markRead = async ()=>{ await markRequestsReadOnServer(u, tk); };
   if(scroll) scroll.scrollTop = scroll.scrollHeight; // jump to latest/unread area
+  // Opening the page re-fetches the feed so messages from other people are shown (at most every 5 s).
+  if(!session._reqLastFetch || Date.now()-session._reqLastFetch > 5000){
+    session._reqLastFetch = Date.now();
+    const before = (list[list.length-1]||{}).id + ':' + list.length + ':' + DB.requestUnread[tk];
+    hydrateRequestsFromServer(u, tk).then(ok=>{
+      const l2 = requestsFor(tk);
+      const after = (l2[l2.length-1]||{}).id + ':' + l2.length + ':' + DB.requestUnread[tk];
+      const input = document.getElementById('reqInput');
+      if(ok && before!==after && session.page==='requests' && !(input && input.value)) render();
+    });
+  }
   const jump = document.getElementById('jumpUnreadBtn');
   if(jump) jump.addEventListener('click', ()=>{
     const div = document.getElementById('unreadDivider'); if(div) div.scrollIntoView({behavior:'smooth', block:'center'});
-    markRead(); setTimeout(()=>render(),600);
+    markRead().then(()=> setTimeout(()=>render(),600));
   });
   const sendBtn = document.getElementById('reqSendBtn');
   const input = document.getElementById('reqInput');
-  const send = ()=>{
-    const txt = input.value.trim(); if(!txt) return;
-    DB.requests[tk].push({id:uid('r'), team:tk, authorId:u.id, text:txt, at:now(), replies:[]});
-    markRead(); persist(); render(); go('requests');
-    toast('Request posted');
+  let sending = false;
+  const send = async ()=>{
+    const txt = input.value.trim(); if(!txt || sending) return;
+    sending = true; sendBtn.disabled = true;
+    try{
+      await postRequestOnServer(u, tk, txt);   // server stores it, then the feed is re-fetched
+    }catch(e){
+      sending = false; sendBtn.disabled = false;
+      toast(e && e.isNetworkError ? 'Could not reach the server — your request was NOT posted.' : ((e && e.message) || 'Could not post the request'));
+      return; // text stays in the box so nothing is lost
+    }
+    render(); toast('Request posted');
   };
   if(sendBtn) sendBtn.addEventListener('click', send);
   if(input) input.addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
@@ -72,4 +91,3 @@ AFTER_RENDER.requests = function(u){
     if(scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 20) markRead();
   });
 };
-
