@@ -32,8 +32,11 @@ const LOGIN_GROUPS = [
 function renderLogin(){
   const q = (session._loginSearch||'').trim().toLowerCase();
   const matches = (u)=> !q || u.name.toLowerCase().includes(q) || displayTitle(u).toLowerCase().includes(q);
+  // Demo Mode always lists the built-in demo roster, never a copy left in this browser's storage
+  // by an older version of the app (which may lack emails or accounts).
+  const roster = (window.NA1_DEMO_MODE === true) ? buildUsers() : DB.users;
   const cardFor = (id)=>{
-    const u = DB.users.find(x=>x.id===id); if(!u || !matches(u)) return '';
+    const u = roster.find(x=>x.id===id); if(!u || !matches(u)) return '';
     return `<button type="button" class="login-card" data-uid="${u.id}" data-email="${esc(u.email||'')}">
       <span class="avatar login-card-avatar" style="background:${u.avatar}">${initials(u.name)}</span>
       <span class="login-card-info">
@@ -141,7 +144,7 @@ function attachLoginEvents(){
       if(window.NA1_DEMO_MODE === true){
         if(session._loginBusy) return;
         btn.classList.add('is-loading');
-        doLogin(btn.dataset.email || '', null);
+        doLogin(btn.dataset.uid || '', null);   // demo accounts are picked by their fixed id
         return;
       }
       session._loginEmail = btn.dataset.email || '';

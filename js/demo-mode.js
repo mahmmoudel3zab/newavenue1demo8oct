@@ -285,14 +285,15 @@
     getAuthUser: function () { var raw = ss('get', USER_KEY); try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; } },
     isLoggedIn: function () { return !!ss('get', SESSION_KEY); },
     set onUnauthorized(fn) { onUnauthorized = fn; },
-    // Demo sign-in: picks a demo account by email. The password is not used — there is no
-    // server and no real account behind it. This function only exists in Demo Mode.
-    login: function (email) {
+    // Demo sign-in: picks a demo account by its fixed id (e.g. 'm1'), or by its email. The
+    // password is not used — there is no server and no real account behind it. This function
+    // only exists in Demo Mode.
+    login: function (account) {
       return new Promise(function (resolve, reject) {
         setTimeout(function () {
-          var e = String(email || '').trim().toLowerCase();
-          var u = getStore().users.find(function (x) { return (x.email || '').toLowerCase() === e; });
-          if (!u) { reject(fail(401, 'There is no demo account with that email.')); return; }
+          var e = String(account || '').trim().toLowerCase();
+          var u = e && getStore().users.find(function (x) { return x.id.toLowerCase() === e || (x.email || '').toLowerCase() === e; });
+          if (!u) { reject(fail(401, 'That demo account was not found. Please reload the page and pick an account again.')); return; }
           ss('set', SESSION_KEY, u.id); ss('set', USER_KEY, JSON.stringify(safeUser(u)));
           resolve(safeUser(u));
         }, 0);

@@ -2,6 +2,8 @@
 
 This fixes the sign-in problem on your public demo. On the demo, clicking any demo account signs you in right away, with no password and no backend needed. The new Lumen × Clarity design is unchanged.
 
+> **Update (fix for "There is no demo account with that email"):** if you already uploaded the 6 files, you only need to upload these **2 files** again, replacing the old ones: `js/shell.js` and `js/demo-mode.js`. Everything else stays as you uploaded it.
+
 ## What's in this ZIP
 
 - `new-avenue-1-frontend/`: the full corrected frontend, ready to use.
