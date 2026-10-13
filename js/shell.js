@@ -52,6 +52,16 @@ function renderLogin(){
   // deployment sets window.NA1_SHOW_DEMO_ACCOUNTS = false (see index.html) to hide the whole list.
   const showDemoAccounts = window.NA1_SHOW_DEMO_ACCOUNTS !== false;
   const err = session._loginError;
+  // Frontend Demo Mode (js/app-mode.js + js/demo-mode.js): static preview, sample data, no
+  // backend. Only then is the password form replaced by one-click demo accounts.
+  const demoMode = window.NA1_DEMO_MODE === true;
+  const modeError = window.NA1_MODE_ERROR ? `<div class="mode-error" role="alert">${esc(window.NA1_MODE_ERROR)}</div>` : '';
+  const accountList = `<div class="search-field login-search" style="margin:10px 0;">
+            ${ic('search')}<input id="loginSearch" placeholder="Search by name or role…" value="${esc(session._loginSearch||'')}" autocomplete="off">
+          </div>
+          <div class="login-list" id="loginList">
+            ${groupsHTML || `<div class="empty-state" style="padding:26px 10px;">${ic('search')}<div>No accounts match “${esc(session._loginSearch||'')}”.</div></div>`}
+          </div>`;
   return `
   <div class="login-screen">
     <div class="login-shell">
@@ -75,6 +85,15 @@ function renderLogin(){
       </div>
       <div class="login-formpane">
         <div class="login-formpane-inner">
+          ${modeError}
+          ${demoMode ? `<span class="demo-badge demo-badge-light"><i class="db-dot"></i> Frontend Demo Mode</span>
+          <h2>Sign in</h2>
+          <p class="login-formpane-sub">Choose a demo account to explore — no password needed. This preview runs without a backend on sample data, and nothing you do is saved to a server.</p>
+          ${err ? `<div class="login-error" style="color:#B0463F; font-size:12.5px; font-weight:700; margin-bottom:10px;">${esc(err)}</div>` : ''}
+          ${session._loginBusy ? `<div class="login-foot" style="border:0; margin:0 0 6px; padding:0;">Signing in…</div>` : ''}
+          <div class="login-foot" style="margin-top:4px;">Demo accounts — click an account to sign in instantly</div>
+          ${accountList}
+` : `
           <h2>Sign in</h2>
           <p class="login-formpane-sub">Enter your email and password to continue.</p>
           <form id="loginForm" autocomplete="on">
@@ -88,13 +107,8 @@ function renderLogin(){
             <button type="submit" id="loginSubmit" class="btn btn-primary" style="width:100%; margin-top:14px;">${session._loginBusy ? 'Signing in…' : 'Sign in'}</button>
           </form>
           ${showDemoAccounts ? `          <div class="login-foot" style="margin-top:18px;">Demo accounts — click to fill, password still required to sign in</div>
-          <div class="search-field login-search" style="margin:10px 0;">
-            ${ic('search')}<input id="loginSearch" placeholder="Search by name or role…" value="${esc(session._loginSearch||'')}" autocomplete="off">
-          </div>
-          <div class="login-list" id="loginList">
-            ${groupsHTML || `<div class="empty-state" style="padding:26px 10px;">${ic('search')}<div>No accounts match “${esc(session._loginSearch||'')}”.</div></div>`}
-          </div>
-` : ''}
+          ${accountList}
+` : ''}`}
           <div class="login-foot">Internal prototype · Residential &amp; Commercial environments</div>
         </div>
       </div>
@@ -121,6 +135,15 @@ function attachLoginEvents(){
       // Quick-fill only — pre-fills the email + shared demo password so exploring the
       // prototype stays one click, but the real login call below is still what runs.
       const btn = e.currentTarget;
+      // Frontend Demo Mode only: there is no backend, so picking an account signs in straight
+      // away (handled by js/demo-mode.js, which never contacts a server). In Full Application
+      // Mode this branch cannot run and the card only pre-fills the real login form below.
+      if(window.NA1_DEMO_MODE === true){
+        if(session._loginBusy) return;
+        btn.classList.add('is-loading');
+        doLogin(btn.dataset.email || '', null);
+        return;
+      }
       session._loginEmail = btn.dataset.email || '';
       const emailEl = document.getElementById('loginEmail');
       const pwEl = document.getElementById('loginPassword');
@@ -194,6 +217,7 @@ function renderShell(u){
   <div id="main">
     <div class="topbar">
       <div class="topbar-row">
+        ${window.NA1_DEMO_MODE === true ? `<span class="demo-badge" title="Frontend Demo Mode — sample data, no backend, nothing is saved"><i class="db-dot"></i><span class="db-label">Demo Mode</span></span>` : ''}
         <form class="global-search" id="globalSearchForm" role="search">
           <span class="gs-env"><i></i>${envLabel}</span>${ic('search')}
           <input id="globalSearchInput" type="search" placeholder="Search units by compound, developer or area" aria-label="Search the News Feed" autocomplete="off">

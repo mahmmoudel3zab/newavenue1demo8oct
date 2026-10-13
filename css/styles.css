@@ -526,3 +526,17 @@ tr:last-child td{border-bottom:none;}
   .login-brandpane-mid p{display:none;}
   .login-stats{display:none;}
 }
+
+/* =========================================================
+   FRONTEND DEMO MODE — only rendered when js/app-mode.js says 'demo'
+   ========================================================= */
+.demo-badge{display:inline-flex; align-items:center; gap:7px; flex-shrink:0; white-space:nowrap;
+  font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--gold); background:rgba(205,174,126,.12); border:1px solid rgba(205,174,126,.45);
+  border-radius:999px; padding:7px 12px;}
+.demo-badge .db-dot{width:7px; height:7px; border-radius:50%; background:var(--gold); display:inline-block; box-shadow:0 0 0 3px rgba(205,174,126,.22);}
+.demo-badge-light{align-self:flex-start; color:var(--brand-dark); background:var(--brand-tint); border-color:rgba(154,116,66,.35); margin-bottom:14px;}
+.demo-badge-light .db-dot{background:var(--brand-dark);}
+.mode-error{background:var(--warning-tint); color:var(--warning); border:1px solid var(--warning); border-radius:12px;
+  padding:10px 12px; font-size:12.5px; font-weight:700; line-height:1.45; margin-bottom:14px;}
+@media (max-width:880px){ .demo-badge{padding:9px 10px;} .demo-badge .db-label{display:none;} }

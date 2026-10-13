@@ -18,6 +18,8 @@ AFTER_RENDER.profile = function(u){
   document.getElementById('switchAccBtn').addEventListener('click', logout);
   document.getElementById('resetDemoBtn').addEventListener('click', ()=>{
     if(confirm('This will reset all demo data (leads, units, requests, owners) back to the original state. Continue?')){
+      // Frontend Demo Mode keeps its sample data in js/demo-mode.js: reset that and reload it.
+      if(window.NA1_DEMO_MODE === true && NA1_API.resetDemoData){ NA1_API.resetDemoData(); hydrateSessionData(u).then(()=>{ toast('Demo data reset'); render(); }); return; }
       localStorage.removeItem(STORAGE_KEY); DB = loadDB(); toast('Demo data reset'); render();
     }
   });
