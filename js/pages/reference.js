@@ -10,6 +10,16 @@ function waHref(localPhone){ return 'https://wa.me/20'+String(localPhone).replac
 
 function renderReferencePage(u){
   const tk = myTeamKey(u);
+  return `
+  <div class="section-sub" style="margin-bottom:10px;">${tk[0].toUpperCase()+tk.slice(1)} team — search any salesperson or manager to call or message them directly</div>
+  <div class="search-field" style="max-width:420px; margin-bottom:16px;">
+    ${ic('search')}<input id="refSearch" type="search" placeholder="Search by name or reference code…" value="${esc(session._refSearch||'')}" autocomplete="off" aria-label="Search the reference directory">
+  </div>
+  <div class="card" id="refResults">${referenceResultsHTML(u)}</div>`;
+}
+// The matching directory rows only — refreshed on their own while typing (see AFTER_RENDER).
+function referenceResultsHTML(u){
+  const tk = myTeamKey(u);
   const q = (session._refSearch||'').trim().toLowerCase();
   // Name/role/manager/code are always resolved live from DB.users (see refUser()/refManager()
   // in data.js) — never from a cached copy on the ref row — so an admin renaming someone,
@@ -18,14 +28,7 @@ function renderReferencePage(u){
   let list = DB.refs.filter(r=>r.team===tk).map(r=>({r, person: refUser(r)})).filter(x=>x.person);
   if(q){ list = list.filter(({r,person})=> person.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q)); }
   list = list.slice().sort((a,b)=>a.person.name.localeCompare(b.person.name));
-  return `
-  <div class="section-sub" style="margin-bottom:10px;">${tk[0].toUpperCase()+tk.slice(1)} team — search any salesperson or manager to call or message them directly</div>
-  <div class="search-field" style="max-width:420px; margin-bottom:16px;">
-    ${ic('search')}<input id="refSearch" placeholder="Search by name or reference code…" value="${esc(session._refSearch||'')}">
-  </div>
-  <div class="card">
-    ${list.length? list.map(({r,person})=>referenceRow(r,person,u)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
-  </div>`;
+  return list.length? list.map(({r,person})=>referenceRow(r,person,u)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.');
 }
 
 function referenceRow(r,person,u){
@@ -51,17 +54,22 @@ function referenceRow(r,person,u){
 AFTER_RENDER.reference = function(u){
   const s = document.getElementById('refSearch');
   if(s){
-    s.addEventListener('input', ()=>{ session._refSearch = s.value; renderPageInto(u); });
-    // Re-rendering replaces the whole page DOM on every keystroke, which would otherwise drop
-    // focus out of the search box mid-type — restore focus + caret position right after.
-    if(session._refSearchFocused){ s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
-    s.addEventListener('focus', ()=>{ session._refSearchFocused = true; });
-    s.addEventListener('blur', ()=>{ session._refSearchFocused = false; });
+    // Only the results are refreshed while typing; the search box itself is never re-created,
+    // so focus, caret position, paste and the mobile keyboard are unaffected.
+    s.addEventListener('input', ()=>{
+      session._refSearch = s.value;
+      const box = document.getElementById('refResults');
+      if(box){ box.innerHTML = referenceResultsHTML(u); bindReferenceRows(u); }
+    });
   }
-  document.querySelectorAll('[data-refphone]').forEach(a=> a.addEventListener('click', ()=> toast('Opening phone dialer…')));
-  document.querySelectorAll('[data-refwa]').forEach(a=> a.addEventListener('click', ()=> toast('Opening WhatsApp…')));
-  document.querySelectorAll('[data-editref]').forEach(b=> b.addEventListener('click', ()=> openEditRefModal(b.dataset.editref, u)));
+  bindReferenceRows(u);
 };
+function bindReferenceRows(u){
+  const box = document.getElementById('refResults'); if(!box) return;
+  box.querySelectorAll('[data-refphone]').forEach(a=> a.addEventListener('click', ()=> toast('Opening phone dialer…')));
+  box.querySelectorAll('[data-refwa]').forEach(a=> a.addEventListener('click', ()=> toast('Opening WhatsApp…')));
+  box.querySelectorAll('[data-editref]').forEach(b=> b.addEventListener('click', ()=> openEditRefModal(b.dataset.editref, u)));
+}
 
 function openEditRefModal(refId, u){
   const r = DB.refs.find(x=>x.id===refId);

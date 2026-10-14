@@ -43,6 +43,13 @@ function initAudienceState(){
   return session._anAudience;
 }
 
+// Matching employees for the "Specific employees" picker — refreshed on its own while typing.
+function employeeSearchResultsHTML(){
+  const aud = initAudienceState();
+  const q = (session._anEmployeeSearch||'').trim().toLowerCase();
+  const results = q ? DB.users.filter(x=> x.name.toLowerCase().includes(q) && !aud.employeeIds.includes(x.id)).slice(0,8) : [];
+  return results.length? `<div class="card" style="margin-top:6px; max-height:180px; overflow-y:auto;">${results.map(x=>`<div data-anaddemp="${x.id}" style="padding:8px 12px; border-bottom:1px solid var(--border); cursor:pointer; font-size:12.5px; display:flex; justify-content:space-between;"><span>${esc(x.name)}</span><span style="color:var(--text-faint);">${esc(displayTitle(x))}</span></div>`).join('')}</div>` : (q?'<div class="section-sub" style="margin-top:6px;">No matching employee.</div>':'');
+}
 function audiencePickerHtml(){
   const aud = initAudienceState();
   const recipients = computeAnnouncementRecipients(aud, null);
@@ -62,12 +69,10 @@ function audiencePickerHtml(){
         <option value="commercial" ${aud.team==='commercial'?'selected':''}>Commercial</option>
       </select></div>`;
   } else if(aud.type==='employees'){
-    const q = (session._anEmployeeSearch||'').trim().toLowerCase();
     const selected = DB.users.filter(x=>aud.employeeIds.includes(x.id));
-    const results = q ? DB.users.filter(x=> x.name.toLowerCase().includes(q) && !aud.employeeIds.includes(x.id)).slice(0,8) : [];
     picker = `<div class="field"><label class="field-label">Search and select employees</label>
-      <div class="search-field">${ic('search')}<input id="an_empSearch" placeholder="Search employee by name…" value="${esc(session._anEmployeeSearch||'')}"></div>
-      ${results.length? `<div class="card" style="margin-top:6px; max-height:180px; overflow-y:auto;">${results.map(x=>`<div data-anaddemp="${x.id}" style="padding:8px 12px; border-bottom:1px solid var(--border); cursor:pointer; font-size:12.5px; display:flex; justify-content:space-between;"><span>${esc(x.name)}</span><span style="color:var(--text-faint);">${esc(displayTitle(x))}</span></div>`).join('')}</div>` : (q?'<div class="section-sub" style="margin-top:6px;">No matching employee.</div>':'')}
+      <div class="search-field">${ic('search')}<input id="an_empSearch" type="search" placeholder="Search employee by name…" value="${esc(session._anEmployeeSearch||'')}" autocomplete="off" aria-label="Search employees"></div>
+      <div id="an_empResults">${employeeSearchResultsHTML()}</div>
       <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;">
         ${selected.length? selected.map(x=>`<span class="badge badge-brand" style="display:inline-flex; align-items:center; gap:5px;">${esc(x.name)} <button type="button" data-anremoveemp="${x.id}" style="border:none; background:none; cursor:pointer; color:inherit; font-weight:800; padding:0;">×</button></span>`).join('') : '<span style="font-size:11.5px; color:var(--text-faint);">No employees selected yet.</span>'}
       </div></div>`;
@@ -92,10 +97,10 @@ function renderAnnouncementsPage(u){
   const composeCard = hr ? `<div class="card card-pad" style="margin-bottom:18px;">
     <div class="section-title">New announcement</div>
     <div class="section-sub">Choose exactly who should receive it — every employee, by job title, by team, or specific people — then publish as an in-app notification.</div>
-    <div class="field"><label class="field-label">Title</label><input id="an_title" placeholder="e.g. Public Holiday — Thursday, Oct 15"></div>
-    <div class="field"><label class="field-label">Message</label><textarea id="an_message" rows="5" placeholder="Write the full announcement here…"></textarea></div>
+    <div class="field"><label class="field-label" for="an_title">Title</label><input id="an_title" placeholder="e.g. Public Holiday — Thursday, Oct 15" value="${esc(session._anDraftTitle||'')}"></div>
+    <div class="field"><label class="field-label" for="an_message">Message</label><textarea id="an_message" rows="5" placeholder="Write the full announcement here…">${esc(session._anDraftMessage||'')}</textarea></div>
     <div class="divider"></div>
-    ${audiencePickerHtml()}
+    <div id="an_audienceBox">${audiencePickerHtml()}</div>
     <button class="btn btn-primary" id="sendAnnouncementBtn">${ic('announce')} Publish announcement</button>
   </div>` : '';
 
@@ -124,40 +129,12 @@ AFTER_RENDER.announcements = function(u){
   }));
   if(!isHeadHR(u)) return; // nothing else on this page belongs to a non-HR viewer
 
-  const aud = initAudienceState();
-
-  const typeSel = document.getElementById('an_audType');
-  if(typeSel) typeSel.addEventListener('change', ()=>{
-    session._anAudience = {type:typeSel.value, jobTitles:[], team:'', employeeIds: aud.type==='employees'?aud.employeeIds:[]};
-    renderPageInto(u);
-  });
-
-  document.querySelectorAll('[data-anjobtitle]').forEach(cb=> cb.addEventListener('change', ()=>{
-    const t = cb.value;
-    if(cb.checked){ if(!aud.jobTitles.includes(t)) aud.jobTitles.push(t); }
-    else { aud.jobTitles = aud.jobTitles.filter(x=>x!==t); }
-    renderPageInto(u);
-  }));
-
-  const teamSel = document.getElementById('an_team');
-  if(teamSel) teamSel.addEventListener('change', ()=>{ aud.team = teamSel.value; renderPageInto(u); });
-
-  const empSearch = document.getElementById('an_empSearch');
-  if(empSearch){
-    empSearch.addEventListener('input', ()=>{ session._anEmployeeSearch = empSearch.value; renderPageInto(u); });
-    if(session._anEmpSearchFocused){ empSearch.focus(); empSearch.setSelectionRange(empSearch.value.length, empSearch.value.length); }
-    empSearch.addEventListener('focus', ()=>{ session._anEmpSearchFocused = true; });
-    empSearch.addEventListener('blur', ()=>{ session._anEmpSearchFocused = false; });
-  }
-  document.querySelectorAll('[data-anaddemp]').forEach(el=> el.addEventListener('click', ()=>{
-    if(!aud.employeeIds.includes(el.dataset.anaddemp)) aud.employeeIds.push(el.dataset.anaddemp);
-    session._anEmployeeSearch = '';
-    renderPageInto(u);
-  }));
-  document.querySelectorAll('[data-anremoveemp]').forEach(el=> el.addEventListener('click', ()=>{
-    aud.employeeIds = aud.employeeIds.filter(id=>id!==el.dataset.anremoveemp);
-    renderPageInto(u);
-  }));
+  // The draft is kept in the session as it is typed, so nothing on this page can erase it (the
+  // background refresh, opening an announcement, changing the audience…).
+  const tEl = document.getElementById('an_title'), mEl = document.getElementById('an_message');
+  if(tEl) tEl.addEventListener('input', ()=>{ session._anDraftTitle = tEl.value; });
+  if(mEl) mEl.addEventListener('input', ()=>{ session._anDraftMessage = mEl.value; });
+  bindAudiencePicker(u);
 
   const sendBtn = document.getElementById('sendAnnouncementBtn');
   if(sendBtn) sendBtn.addEventListener('click', async ()=>{
@@ -190,7 +167,53 @@ AFTER_RENDER.announcements = function(u){
     }
     session._anAudience = null; // reset the compose form's audience picker for next time
     session._anEmployeeSearch = '';
+    session._anDraftTitle = ''; session._anDraftMessage = '';
     toast('Announcement sent to '+res.recipientCount+' employee'+(res.recipientCount===1?'':'s'));
     renderPageInto(u);
   });
 };
+
+// Audience picker events. Every change re-draws ONLY the audience box (#an_audienceBox), never the
+// whole page, so the title and message being written above are left exactly as they are; typing
+// in the employee search re-draws only its result list (#an_empResults), so the box keeps focus.
+function refreshAudiencePicker(u, focusEmpSearch){
+  const box = document.getElementById('an_audienceBox'); if(!box) return;
+  box.innerHTML = audiencePickerHtml();
+  bindAudiencePicker(u);
+  if(focusEmpSearch){ const es = document.getElementById('an_empSearch'); if(es) es.focus(); }
+}
+function bindEmployeeResults(u){
+  const aud = initAudienceState();
+  document.querySelectorAll('[data-anaddemp]').forEach(el=> el.addEventListener('click', ()=>{
+    if(!aud.employeeIds.includes(el.dataset.anaddemp)) aud.employeeIds.push(el.dataset.anaddemp);
+    session._anEmployeeSearch = '';
+    refreshAudiencePicker(u, true);
+  }));
+}
+function bindAudiencePicker(u){
+  const aud = initAudienceState();
+  const typeSel = document.getElementById('an_audType');
+  if(typeSel) typeSel.addEventListener('change', ()=>{
+    session._anAudience = {type:typeSel.value, jobTitles:[], team:'', employeeIds: aud.type==='employees'?aud.employeeIds:[]};
+    refreshAudiencePicker(u);
+  });
+  document.querySelectorAll('[data-anjobtitle]').forEach(cb=> cb.addEventListener('change', ()=>{
+    const t = cb.value;
+    if(cb.checked){ if(!aud.jobTitles.includes(t)) aud.jobTitles.push(t); }
+    else { aud.jobTitles = aud.jobTitles.filter(x=>x!==t); }
+    refreshAudiencePicker(u);
+  }));
+  const teamSel = document.getElementById('an_team');
+  if(teamSel) teamSel.addEventListener('change', ()=>{ aud.team = teamSel.value; refreshAudiencePicker(u); });
+  const empSearch = document.getElementById('an_empSearch');
+  if(empSearch) empSearch.addEventListener('input', ()=>{
+    session._anEmployeeSearch = empSearch.value;
+    const r = document.getElementById('an_empResults');
+    if(r){ r.innerHTML = employeeSearchResultsHTML(); bindEmployeeResults(u); }
+  });
+  bindEmployeeResults(u);
+  document.querySelectorAll('[data-anremoveemp]').forEach(el=> el.addEventListener('click', ()=>{
+    aud.employeeIds = aud.employeeIds.filter(id=>id!==el.dataset.anremoveemp);
+    refreshAudiencePicker(u);
+  }));
+}

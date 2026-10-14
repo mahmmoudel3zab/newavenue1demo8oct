@@ -207,7 +207,7 @@ function renderOwnerDupWarning(ctx, viewer, opts){
   const canOverride = !opts.readOnly && isAdmin(viewer) && typeof canManageUsers==='function' && canManageUsers(viewer);
   return `<div class="card card-pad" id="dupWarnCard" style="background:var(--danger-tint); border:1px solid var(--danger); margin:4px 0 14px; font-size:12.5px;">
     <div style="font-weight:800; color:var(--danger); margin-bottom:4px;">${ic('notif')} Existing Owner Found</div>
-    <div style="margin-bottom:8px;">This phone number is already registered in New Avenue 1${opts.readOnly?' with a different owner record':''}.</div>
+    <div style="margin-bottom:8px;">This phone number is already registered in New Avenue${opts.readOnly?' with a different owner record':''}.</div>
     <div style="margin-bottom:3px;"><b>${esc(ctx.ownerName)}</b> · ${phoneLocalDisplay(ctx.phone)}${ctx.phone2?' / '+phoneLocalDisplay(ctx.phone2):''}</div>
     <div style="margin-bottom:3px;">Registered salesperson: <b>${esc(ctx.holderName||'—')}</b>${ctx.holderRefCode?' · Ref '+esc(ctx.holderRefCode):''}</div>
     ${ctx.holderTeamLabel ? `<div style="margin-bottom:6px; color:var(--text-faint);">${esc(ctx.holderTeamLabel)}${ctx.holderManagerName?' · Reports to '+esc(ctx.holderManagerName):''}</div>` : ''}

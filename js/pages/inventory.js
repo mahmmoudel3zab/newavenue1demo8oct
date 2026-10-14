@@ -14,9 +14,10 @@ function matchesCountFilter(selected, value, maxExactOption){
     return String(value)===s;
   });
 }
-function renderInventoryPage(u){
+// The filtered + sorted News Feed list (shared by the full page render and the live results
+// refresh used while typing, so both always agree).
+function inventoryFilteredList(u){
   const tk = myTeamKey(u);
-  const unitTypes = tk==='residential'?UNIT_TYPES_RES:UNIT_TYPES_COM;
   const f = session.invFilters;
   let list = DB.units.filter(x=>x.team===tk && !x.deletedAt);
   if(session.invSearch){
@@ -29,46 +30,67 @@ function renderInventoryPage(u){
   if(f.finishing.length) list = list.filter(x=> f.finishing.includes(x.finishing));
   if(f.saleRent.length) list = list.filter(x=> f.saleRent.includes(x.saleRent));
   if(f.delivery.length) list = list.filter(x=> f.delivery.includes(deliveryBucket(x.deliveryYears)));
-  const dpMin = f.dpMin!==''?Number(f.dpMin):null, dpMax = f.dpMax!==''?Number(f.dpMax):null;
-  const totalMin = f.totalMin!==''?Number(f.totalMin):null, totalMax = f.totalMax!==''?Number(f.totalMax):null;
-  if(dpMin!=null) list = list.filter(x=> x.downPayment>=dpMin);
-  if(dpMax!=null) list = list.filter(x=> x.downPayment<=dpMax);
-  if(totalMin!=null) list = list.filter(x=> x.totalPrice>=totalMin);
-  if(totalMax!=null) list = list.filter(x=> x.totalPrice<=totalMax);
+  const r = inventoryPriceRange();
+  if(r.dpMin!=null) list = list.filter(x=> x.downPayment>=r.dpMin);
+  if(r.dpMax!=null) list = list.filter(x=> x.downPayment<=r.dpMax);
+  if(r.totalMin!=null) list = list.filter(x=> x.totalPrice>=r.totalMin);
+  if(r.totalMax!=null) list = list.filter(x=> x.totalPrice<=r.totalMax);
 
   if(session.invSort==='popularity') list = list.slice().sort((a,b)=>popularityScore(b)-popularityScore(a));
   else if(session.invSort==='newest') list = list.slice().sort((a,b)=>b.createdAt-a.createdAt);
   else list = list.slice().sort((a,b)=>a.createdAt-b.createdAt);
+  return list;
+}
+function inventoryPriceRange(){
+  const f = session.invFilters;
+  const num = (v)=> (v!=='' && v!=null && !isNaN(Number(v))) ? Number(v) : null;
+  return { dpMin:num(f.dpMin), dpMax:num(f.dpMax), totalMin:num(f.totalMin), totalMax:num(f.totalMax) };
+}
+function inventoryActiveFilterCount(){
+  const f = session.invFilters, r = inventoryPriceRange();
+  return f.bedrooms.length+f.bathrooms.length+f.unitType.length+f.finishing.length+f.saleRent.length+f.delivery.length
+    + (r.dpMin!=null||r.dpMax!=null?1:0) + (r.totalMin!=null||r.totalMax!=null?1:0);
+}
+function inventoryFiltersBtnHTML(n){ return `${ic('search')} Filters${n>0?` <span class="badge badge-brand" style="margin-left:2px;">${n}</span>`:''}`; }
+function inventoryCountText(n){ return `${n} unit${n===1?'':'s'} found`; }
+function inventoryResultsHTML(list, activeFilterCount){
+  if(!list.length) return `<div class="empty-state card">${ic('inventory')}<div>No units match these filters.</div>${activeFilterCount>0?`<button class="btn btn-sm" id="emptyClearFiltersBtn" style="margin-top:10px;">Reset all filters</button>`:''}</div>`;
+  return unitCollectionHTML(list, un=> unitViewMode()==='list' ? unitRow(un) : unitCard(un));
+}
+function renderInventoryPage(u){
+  const tk = myTeamKey(u);
+  const unitTypes = tk==='residential'?UNIT_TYPES_RES:UNIT_TYPES_COM;
+  const f = session.invFilters;
+  const list = inventoryFilteredList(u);
 
   // "6 bedrooms or more" / "5 bathrooms or more" — not an artificial cap, just the highest
   // bucket; matchesCountFilter() treats the "+"-suffixed option as "this many or more".
   const bedroomOpts = tk==='residential' ? [['0','Studio'],['1','1'],['2','2'],['3','3'],['4','4'],['5','5'],['6+','6 or more']] : [];
   const bathroomOpts = [['1','1'],['2','2'],['3','3'],['4','4'],['5+','5 or more']];
 
-  const activeFilterCount = f.bedrooms.length+f.bathrooms.length+f.unitType.length+f.finishing.length+f.saleRent.length+f.delivery.length
-    + (dpMin!=null||dpMax!=null?1:0) + (totalMin!=null||totalMax!=null?1:0);
+  const activeFilterCount = inventoryActiveFilterCount();
 
   return `
   <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
     <div style="position:relative; flex:1; min-width:200px;">
-      <input id="invSearch" placeholder="Search compound, developer, or area…" value="${esc(session.invSearch)}">
+      <input id="invSearch" type="search" placeholder="Search compound, developer, or area…" value="${esc(session.invSearch)}" autocomplete="off" aria-label="Search the News Feed">
     </div>
-    <select id="invSort" style="width:auto;">
+    <select id="invSort" style="width:auto;" aria-label="Sort units">
       <option value="popularity" ${session.invSort==='popularity'?'selected':''}>Sort: Popularity</option>
       <option value="newest" ${session.invSort==='newest'?'selected':''}>Sort: Newest</option>
       <option value="oldest" ${session.invSort==='oldest'?'selected':''}>Sort: Oldest</option>
     </select>
-    <button class="btn btn-sm" id="toggleFiltersBtn">${ic('search')} Filters${activeFilterCount>0?` <span class="badge badge-brand" style="margin-left:2px;">${activeFilterCount}</span>`:''}</button>
+    <button class="btn btn-sm" id="toggleFiltersBtn" aria-expanded="${session._showFilters?'true':'false'}">${inventoryFiltersBtnHTML(activeFilterCount)}</button>
   </div>
   <div id="filterPanel" class="card card-pad filter-panel" style="display:${session._showFilters?'block':'none'}; margin-bottom:14px;">
     <div class="filter-section-label">Price</div>
     <div class="filter-range-row">
-      <div class="field" style="margin-bottom:0;"><label class="field-label">Down payment — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMin" placeholder="e.g. 2,000,000" value="${esc(f.dpMin)}"></div>
-      <div class="field" style="margin-bottom:0;"><label class="field-label">Down payment — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMax" placeholder="e.g. 3,000,000" value="${esc(f.dpMax)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label" for="dpMin">Down payment — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMin" placeholder="e.g. 2,000,000" value="${esc(f.dpMin)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label" for="dpMax">Down payment — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="dpMax" placeholder="e.g. 3,000,000" value="${esc(f.dpMax)}"></div>
     </div>
     <div class="filter-range-row" style="margin-top:10px; margin-bottom:16px;">
-      <div class="field" style="margin-bottom:0;"><label class="field-label">Total price — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMin" placeholder="e.g. 8,000,000" value="${esc(f.totalMin)}"></div>
-      <div class="field" style="margin-bottom:0;"><label class="field-label">Total price — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMax" placeholder="e.g. 12,000,000" value="${esc(f.totalMax)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label" for="totalMin">Total price — min (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMin" placeholder="e.g. 8,000,000" value="${esc(f.totalMin)}"></div>
+      <div class="field" style="margin-bottom:0;"><label class="field-label" for="totalMax">Total price — max (EGP)</label><input type="number" min="0" inputmode="numeric" id="totalMax" placeholder="e.g. 12,000,000" value="${esc(f.totalMax)}"></div>
     </div>
     ${bedroomOpts.length?filterGroup('Bedrooms','bedrooms',bedroomOpts,f.bedrooms):''}
     ${filterGroup('Bathrooms','bathrooms',bathroomOpts,f.bathrooms)}
@@ -78,9 +100,85 @@ function renderInventoryPage(u){
     ${filterGroup('Delivery','delivery',[['Immediate','Immediate'],['1y','Within 1 year'],['2y','Within 2 years'],['4y','2+ years']],f.delivery)}
     <button class="btn btn-ghost btn-sm" id="clearFiltersBtn" ${activeFilterCount===0?'disabled':''}>${ic('x')} Reset all filters</button>
   </div>
-  <div class="section-sub">${list.length} unit${list.length===1?'':'s'} found</div>
-  <div class="grid-3" id="unitGrid">
-    ${list.length? list.map(un=>unitCard(un)).join('') : `<div class="empty-state" style="grid-column:1/-1;">${ic('inventory')}<div>No units match these filters.</div>${activeFilterCount>0?`<button class="btn btn-sm" id="emptyClearFiltersBtn" style="margin-top:10px;">Reset all filters</button>`:''}</div>`}
+  <div class="results-bar">
+    <div class="section-sub" id="invCount" aria-live="polite">${inventoryCountText(list.length)}</div>
+    ${unitViewSwitcherHTML()}
+  </div>
+  <div id="invResults">${inventoryResultsHTML(list, activeFilterCount)}</div>`;
+}
+// Live refresh while typing / switching view: replaces ONLY the results (count, cards, filter
+// badge). The search box and filter inputs are never re-created, so they keep focus, caret and
+// the on-screen keyboard while the list updates.
+function refreshInventoryResults(u){
+  const list = inventoryFilteredList(u), n = inventoryActiveFilterCount();
+  const res = document.getElementById('invResults'); if(!res) return;
+  res.innerHTML = inventoryResultsHTML(list, n);
+  const cnt = document.getElementById('invCount'); if(cnt) cnt.textContent = inventoryCountText(list.length);
+  const tf = document.getElementById('toggleFiltersBtn'); if(tf) tf.innerHTML = inventoryFiltersBtnHTML(n);
+  const cf = document.getElementById('clearFiltersBtn'); if(cf) cf.disabled = n===0;
+  syncUnitViewSwitcher();
+  bindInventoryResults(u);
+}
+function bindInventoryResults(u){
+  const res = document.getElementById('invResults'); if(!res) return;
+  res.querySelectorAll('.unit-card').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
+  const ecf = document.getElementById('emptyClearFiltersBtn');
+  if(ecf) ecf.addEventListener('click', ()=>{ session.invFilters = blankInvFilters(); renderPageInto(u); });
+}
+
+/* ---------- Grid / List view (News Feed and My Units share one remembered choice) ---------- */
+function unitViewMode(){
+  if(!session.unitView) session.unitView = uiPrefGet('unitView') === 'list' ? 'list' : 'grid';
+  return session.unitView;
+}
+function setUnitViewMode(v){
+  session.unitView = v==='list' ? 'list' : 'grid';
+  uiPrefSet('unitView', session.unitView);   // display preference only (see uiPrefSet in shell.js)
+}
+function unitViewSwitcherHTML(){
+  const m = unitViewMode();
+  return `<div class="view-switch" role="group" aria-label="Choose how units are shown">
+    <button type="button" class="${m==='grid'?'on':''}" data-unitview="grid" aria-pressed="${m==='grid'}" title="Grid view">${ic('viewgrid')}<span>Grid</span></button>
+    <button type="button" class="${m==='list'?'on':''}" data-unitview="list" aria-pressed="${m==='list'}" title="List view">${ic('viewlist')}<span>List</span></button>
+  </div>`;
+}
+function syncUnitViewSwitcher(){
+  const m = unitViewMode();
+  document.querySelectorAll('[data-unitview]').forEach(b=>{ const on = b.dataset.unitview===m; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+}
+function bindUnitViewSwitcher(onChange){
+  document.querySelectorAll('[data-unitview]').forEach(b=> b.addEventListener('click', ()=>{
+    if(b.dataset.unitview===unitViewMode()) return;
+    setUnitViewMode(b.dataset.unitview); onChange();
+  }));
+}
+function unitCollectionHTML(list, renderItem){
+  return unitViewMode()==='list'
+    ? `<div class="unit-list" id="unitGrid">${list.map(renderItem).join('')}</div>`
+    : `<div class="grid-3" id="unitGrid">${list.map(renderItem).join('')}</div>`;
+}
+// List-view row: the same unit, same data and same click-to-open behaviour as unitCard(),
+// laid out as one compact row (photo · details · price).
+function unitRow(un){
+  return `<div class="card unit-card unit-row" data-unit="${un.id}">
+    ${(un.photoIds&&un.photoIds.length)
+      ? `<div class="scrim-photo uc-photo ur-photo uc-photo-real"><img data-photo-id="${un.photoIds[0]}" data-photo-size="thumb" alt="${esc(un.compound)}"></div>`
+      : `<div class="scrim-photo uc-photo ur-photo">${un.photos} photos</div>`}
+    <div class="ur-main">
+      <div class="uc-toprow"><div class="uc-title">${esc(un.compound)}</div>${un.pending?'<span class="badge badge-pending">Pending</span>':''}</div>
+      <div class="uc-subline">${esc(un.unitType)} · ${esc(un.area)} · ${un.saleRent} · ${esc(deliveryLabel(un.deliveryYears))}</div>
+      <div class="uc-specs">
+        ${un.bedrooms!=null?`<span>${ic('bed')} ${un.bedrooms}</span>`:''}
+        <span>${ic('bath')} ${un.bathrooms}</span>
+        <span>${ic('area')} ${un.areaSize}m²</span>
+        ${un.garden?`<span>🌿 ${un.garden}m²</span>`:''}
+      </div>
+    </div>
+    <div class="ur-price">
+      <div class="uc-pricelabel">Total price</div>
+      <div class="ur-total">${fmtMoney(un.totalPrice)}</div>
+      <div class="ur-dp">DP ${fmtMoney(un.downPayment)} · ${un.remainingInstallments} mo</div>
+    </div>
   </div>`;
 }
 function filterGroup(label, key, opts, selected){
@@ -125,12 +223,17 @@ function unitCard(un){
   </div>`;
 }
 AFTER_RENDER.inventory = function(u){
-  const s = document.getElementById('invSearch'); if(s) s.addEventListener('input', ()=>{ session.invSearch = s.value; renderPageInto(u); });
-  const so = document.getElementById('invSort'); if(so) so.addEventListener('change', ()=>{ session.invSort = so.value; renderPageInto(u); });
-  const tf = document.getElementById('toggleFiltersBtn'); if(tf) tf.addEventListener('click', ()=>{ session._showFilters = !session._showFilters; renderPageInto(u); });
-  const doClear = ()=>{ session.invFilters = blankInvFilters(); renderPageInto(u); };
-  const cf = document.getElementById('clearFiltersBtn'); if(cf) cf.addEventListener('click', doClear);
-  const ecf = document.getElementById('emptyClearFiltersBtn'); if(ecf) ecf.addEventListener('click', doClear);
+  // Typing in the search box or the price filters only refreshes the results (see
+  // refreshInventoryResults) — the inputs themselves are never re-created, so focus, caret,
+  // paste and the mobile keyboard all keep working while the list filters live.
+  const s = document.getElementById('invSearch'); if(s) s.addEventListener('input', ()=>{ session.invSearch = s.value; refreshInventoryResults(u); });
+  const so = document.getElementById('invSort'); if(so) so.addEventListener('change', ()=>{ session.invSort = so.value; refreshInventoryResults(u); });
+  const tf = document.getElementById('toggleFiltersBtn'); if(tf) tf.addEventListener('click', ()=>{
+    session._showFilters = !session._showFilters;
+    const fp = document.getElementById('filterPanel'); if(fp) fp.setAttribute('style', `display:${session._showFilters?'block':'none'}; margin-bottom:14px;`);  // same text as the markup (the desktop CSS keys off it)
+    tf.setAttribute('aria-expanded', String(!!session._showFilters));
+  });
+  const cf = document.getElementById('clearFiltersBtn'); if(cf) cf.addEventListener('click', ()=>{ session.invFilters = blankInvFilters(); renderPageInto(u); });
   document.querySelectorAll('[data-filter-key]').forEach(b=> b.addEventListener('click', ()=>{
     const k = b.dataset.filterKey, v = b.dataset.filterVal;
     const arr = session.invFilters[k];
@@ -143,19 +246,16 @@ AFTER_RENDER.inventory = function(u){
     session.invFilters[b.dataset.filterClear] = [];
     renderPageInto(u);
   }));
-  // 'change' (fires on blur / Enter), not 'input': these numeric range fields re-render the
-  // whole filter panel when applied, which would otherwise drop keyboard focus mid-digit on
-  // every keystroke (the same reason reference.js's search box needed special focus-restore
-  // handling). Applying on commit instead of per-keystroke sidesteps that entirely and also
-  // avoids filtering against a half-typed number.
+  // Price range fields apply live while typing (results only — the panel is not re-drawn).
   ['dpMin','dpMax','totalMin','totalMax'].forEach(id=>{
     const el = document.getElementById(id);
     if(el){
-      el.addEventListener('change', ()=>{ session.invFilters[id] = el.value; renderPageInto(u); });
+      el.addEventListener('input', ()=>{ session.invFilters[id] = el.value; refreshInventoryResults(u); });
       el.addEventListener('keydown', (e)=>{ if(e.key==='Enter') el.blur(); });
     }
   });
-  document.querySelectorAll('.unit-card').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
+  bindUnitViewSwitcher(()=> refreshInventoryResults(u));
+  bindInventoryResults(u);
 };
 
 // Interactions are recorded by the backend (unique per unit+user+type, so repeat clicks add no
@@ -224,162 +324,228 @@ function openUnitModal(unitId, u){
 }
 
 /* =========================================================
-   Unit PDF / Property Sheet — a premium, branded New Avenue sheet suitable for sending to
-   clients (WhatsApp, print, internal use), not a plain browser printout.
+   Unit PDF — New Avenue property brochure (A4)
+   One template is used for the in-app preview and for the print window ("Print / Save as PDF"),
+   so what the salesperson previews is exactly what the client receives. Everything on it comes
+   from the unit record and the consultant's own Reference-directory contact; a field that is
+   missing is simply left out (no placeholders). Internal data is never printed: no owner
+   details, no admin/pending status, no popularity or audit information.
    ========================================================= */
+function brochureHas(v){ return v!==null && v!==undefined && v!=='' && !(typeof v==='number' && isNaN(v)); }
 function unitSheetHTML(un, sp, dataUrls){
-  const photoCount = Math.min(un.photos, 5);
-  // Real photos when the unit has them (dataUrls = already-downloaded images for the printable
-  // window; without it the modal preview loads them through the normal authenticated loader).
-  const ids = un.photoIds || [];
-  const imgTag = (id, size, alt)=> dataUrls ? (dataUrls[id+'|'+size] ? `<img src="${dataUrls[id+'|'+size]}" alt="${alt}">` : '') : `<img data-photo-id="${id}" data-photo-size="${size}" alt="${alt}">`;
-  const heroPhoto = ids.length
-    ? `<div class="ns-hero-photo ns-hero-real">${imgTag(ids[0],'full','Main photo')}</div>`
-    : `<div class="ns-hero-photo">${ic('area')}<span>${un.photos} photo${un.photos===1?'':'s'} on file</span></div>`;
-  const stripPhotos = ids.length
-    ? ids.slice(1,5).map((id,i)=>`<div class="ns-thumb">${imgTag(id,'thumb','Photo '+(i+2))}</div>`).join('')
-    : Array.from({length:Math.max(photoCount-1,0)}).map((_,i)=>`<div class="ns-thumb">Photo ${i+2}</div>`).join('');
-  const specs = [
-    un.bedrooms!=null ? ['bed','Bedrooms', un.bedrooms] : null,
-    ['bath','Bathrooms', un.bathrooms],
-    ['area','Area', un.areaSize+' m²'],
-    ['calendar','Delivery', deliveryLabel(un.deliveryYears)],
+  // Real photos only. dataUrls = already-downloaded images for the print window; without it the
+  // preview loads them through the normal authenticated photo loader.
+  const ids = (un.photoIds || []).slice(0,5);
+  const imgTag = (id, size, alt)=> dataUrls ? (dataUrls[id+'|'+size] ? `<img src="${dataUrls[id+'|'+size]}" alt="${alt}">` : '') : `<img data-photo-id="${id}" data-photo-size="${size}" data-photo-eager alt="${alt}">`;
+  const isRent = un.saleRent==='Rent';
+  const location = [un.phase, un.area, un.city].filter(brochureHas).map(esc).join(' · ');
+  const facts = [
+    brochureHas(un.bedrooms) ? ['bed', un.bedrooms===0?'Studio':String(un.bedrooms), un.bedrooms===0?'Layout':'Bedrooms'] : null,
+    brochureHas(un.bathrooms) ? ['bath', String(un.bathrooms), 'Bathrooms'] : null,
+    brochureHas(un.areaSize) ? ['area', un.areaSize+' m²', 'Built-up area'] : null,
+    un.garden>0 ? ['area', un.garden+' m²', 'Garden'] : null,
+    un.roof>0 ? ['area', un.roof+' m²', 'Roof'] : null,
+    brochureHas(un.deliveryYears) ? ['calendar', deliveryLabel(un.deliveryYears), 'Delivery'] : null,
   ].filter(Boolean);
-  const extraSpecs = [
-    ['Finishing', un.finishing],
-    ['Furnished', un.furnished?'Yes':'No'],
-    un.garden ? ['Garden', un.garden+' m²'] : null,
-    un.roof ? ['Roof', un.roof+' m²'] : null,
-    ['Sale / Rent', un.saleRent],
-    ['Phase', un.phase],
+  const details = [
+    ['Developer', un.developer], ['Phase', un.phase],
+    ['Location', [un.area, un.city].filter(brochureHas).join(', ')],
+    ['Unit type', un.unitType], ['Offer', isRent ? 'For rent' : 'For sale'],
+    ['Finishing', un.finishing], ['Furnished', un.furnished===true ? 'Yes' : un.furnished===false ? 'No' : null],
+  ].filter(([,v])=> brochureHas(v));
+  const pay = [
+    brochureHas(un.downPayment) ? ['Down payment', fmtMoney(un.downPayment)] : null,
+    brochureHas(un.remainingAmount) && un.remainingAmount>0 ? ['Remaining amount', fmtMoney(un.remainingAmount)] : null,
+    brochureHas(un.remainingInstallments) && un.remainingInstallments>0 ? ['Installments', un.remainingInstallments+' months'] : null,
+    un.extraFees>0 ? ['Extra fees', fmtMoney(un.extraFees)] : null,
   ].filter(Boolean);
   const ref = sp ? DB.refs.find(r=>r.userId===sp.id) : null;
-  // No invented numbers: if the representative has no directory entry the sheet says so.
-  const spPhone = ref ? ref.phone : 'contact details not on file';
-  const spWa = ref ? ref.whatsapp : 'not on file';
-
+  const contact = ref ? [ref.phone ? 'Tel. '+ref.phone : '', ref.whatsapp ? 'WhatsApp '+ref.whatsapp : ''].filter(Boolean).join('  ·  ') : '';
+  const titleSize = (un.compound||'').length > 26 ? ' ns-title-long' : '';
   return `
-  <div class="ns-sheet">
-    <div class="ns-header">
-      <div class="ns-brand"><span class="ns-mark">N</span><div><div class="ns-brand-name">New Avenue</div><div class="ns-brand-sub">Real Estate Consultancy</div></div></div>
-      <div class="ns-doc-meta"><div>Property Sheet</div><div>${esc(fmtDate(now()))}</div></div>
-    </div>
-    <div class="ns-hero">
-      ${heroPhoto}
-      <div class="ns-hero-info">
-        <div class="ns-tag">${esc(un.saleRent)} ${un.pending?' · Pending review':''}</div>
-        <h1>${esc(un.compound)}</h1>
-        <div class="ns-sub">${esc(un.unitType)} · ${esc(un.phase)} · ${esc(un.area)}, ${esc(un.city)}</div>
-        <div class="ns-dev">Developed by ${esc(un.developer)}</div>
+  <div class="ns-sheet${ids.length?'':' ns-nophoto'}">
+    <div class="ns-band">
+      <div class="ns-band-ring"></div>
+      <div class="ns-header">
+        <div class="ns-brand"><span class="ns-mark">N</span><div><div class="ns-brand-name">New Avenue</div><div class="ns-brand-sub">Real Estate Consultancy</div></div></div>
+        <div class="ns-doc-meta"><div class="ns-doc-kind">Property Brochure</div><div>${esc(fmtDate(now()))}</div></div>
+      </div>
+      <div class="ns-heading">
+        <div class="ns-tag">${isRent?'For rent':'For sale'}${brochureHas(un.unitType)?' · '+esc(un.unitType):''}</div>
+        <h1 class="${titleSize}">${esc(un.compound)}</h1>
+        ${location?`<div class="ns-sub">${location}</div>`:''}
+        ${brochureHas(un.developer)?`<div class="ns-dev">Developed by ${esc(un.developer)}</div>`:''}
       </div>
     </div>
-    ${stripPhotos?`<div class="ns-thumbstrip">${stripPhotos}</div>`:''}
-    <div class="ns-specs">
-      ${specs.map(([icon,label,val])=>`<div class="ns-spec"><div class="ns-spec-ic">${ic(icon)}</div><div><div class="ns-spec-val">${esc(val)}</div><div class="ns-spec-label">${esc(label)}</div></div></div>`).join('')}
-    </div>
-    <div class="ns-extra">
-      ${extraSpecs.map(([k,v])=>`<div class="ns-extra-row"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}
-    </div>
-    <div class="ns-pricing">
-      <div class="ns-price-main"><div class="ns-price-label">Total Price</div><div class="ns-price-val">${esc(fmtMoney(un.totalPrice))}</div></div>
-      <div class="ns-price-split">
-        <div><div class="ns-price-label">Down Payment</div><div class="ns-price-sub">${esc(fmtMoney(un.downPayment))}</div></div>
-        <div><div class="ns-price-label">Remaining</div><div class="ns-price-sub">${esc(fmtMoney(un.remainingAmount))}</div></div>
-        <div><div class="ns-price-label">Installments</div><div class="ns-price-sub">${un.remainingInstallments} months</div></div>
+    <div class="ns-body">
+      ${ids.length ? `<div class="ns-gallery${ids.length>1?'':' ns-gallery-single'}">
+        <div class="ns-hero-photo ns-hero-real">${imgTag(ids[0],'full','Main photo')}</div>
+        ${ids.length>1 ? `<div class="ns-thumbstrip ns-thumbs-${ids.length-1}">${ids.slice(1).map((id,i)=>`<div class="ns-thumb">${imgTag(id,'thumb','Photo '+(i+2))}</div>`).join('')}</div>` : ''}
+      </div>` : ''}
+      ${facts.length ? `<div class="ns-facts" style="--n:${facts.length>4?3:facts.length}">${facts.map(([icon,val,label])=>`<div class="ns-fact"><span class="ns-fact-ic">${ic(icon)}</span><div><div class="ns-fact-val">${esc(val)}</div><div class="ns-fact-label">${esc(label)}</div></div></div>`).join('')}</div>` : ''}
+      <div class="ns-cols">
+        <div class="ns-price">
+          <div class="ns-section-label">${isRent?'Rental terms':'Payment plan'}</div>
+          <div class="ns-price-label">${isRent?'Price':'Total price'}</div>
+          <div class="ns-price-val">${esc(fmtMoney(un.totalPrice))}</div>
+          ${pay.length?`<div class="ns-pay">${pay.map(([k,v])=>`<div class="ns-pay-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>`:''}
+        </div>
+        <div class="ns-details">
+          <div class="ns-section-label">Property details</div>
+          ${details.map(([k,v])=>`<div class="ns-detail-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}
+        </div>
       </div>
     </div>
     <div class="ns-footer">
-      <div class="ns-agent">
-        <span class="ns-agent-avatar">${esc(initials(sp?sp.name:'NA'))}</span>
+      ${sp ? `<div class="ns-agent">
+        <span class="ns-agent-avatar">${esc(initials(sp.name))}</span>
         <div>
-          <div class="ns-agent-name">${esc(sp?sp.name:'New Avenue Consultant')}</div>
-          <div class="ns-agent-role">${esc(sp?displayTitle(sp):'')}</div>
-          <div class="ns-agent-contact">${esc(spPhone)} · WhatsApp ${esc(spWa)}</div>
+          <div class="ns-agent-kicker">Your New Avenue consultant</div>
+          <div class="ns-agent-name">${esc(sp.name)}${displayTitle(sp)?` <span>· ${esc(displayTitle(sp))}</span>`:''}</div>
+          ${contact?`<div class="ns-agent-contact">${esc(contact)}</div>`:''}
         </div>
-      </div>
-      <div class="ns-disclaimer">Prices and availability are subject to change without notice. This sheet is for client presentation purposes and does not constitute a binding offer. &copy; New Avenue Real Estate Consultancy.</div>
+      </div>` : ''}
+      <div class="ns-disclaimer">Prices, payment plans and availability are subject to change without notice. This brochure is for presentation purposes only and does not constitute a binding offer. &copy; New Avenue Real Estate Consultancy.</div>
     </div>
   </div>`;
 }
+// Scoped to .ns-* so it can live in the app page (preview) and in the print window unchanged.
+// Sized in px for an A4 page at 96 dpi (794 × 1123), with a fixed page height so a brochure is
+// always exactly one page.
 const UNIT_SHEET_CSS = `
-  *{box-sizing:border-box;}
-  body{font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; margin:0; background:#F5F4F0; color:#20211E; padding:28px;}
-  .ns-sheet{max-width:720px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 2px 30px rgba(0,0,0,.08); border:1px solid #DCD7CA;}
-  .ns-header{display:flex; justify-content:space-between; align-items:center; padding:20px 28px; background:linear-gradient(135deg,#6E5330,#8A6A3B);}
-  .ns-brand{display:flex; align-items:center; gap:11px;}
-  .ns-mark{width:38px;height:38px;border-radius:9px; background:rgba(255,255,255,.18); color:#fff; display:flex; align-items:center; justify-content:center; font-family:Georgia,serif; font-weight:700; font-size:19px;}
-  .ns-brand-name{color:#fff; font-family:Georgia,serif; font-weight:700; font-size:17px; line-height:1.1;}
-  .ns-brand-sub{color:rgba(255,255,255,.75); font-size:10px; letter-spacing:.04em; text-transform:uppercase; margin-top:2px;}
-  .ns-doc-meta{color:rgba(255,255,255,.85); font-size:11px; text-align:right; line-height:1.5;}
-  .ns-hero{display:flex; gap:16px; padding:22px 28px 10px;}
-  .ns-hero-photo{flex:0 0 150px; height:120px; border-radius:10px; background:linear-gradient(135deg,#E4E0D6,#F1E9DA); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:#95937F; font-size:10.5px; font-weight:700;}
-  .ns-hero-photo svg{width:26px;height:26px;}
-  .ns-hero-real{padding:0; overflow:hidden; background:#EDEAE2; flex:0 0 190px; height:140px;}
-  .ns-hero-real img,.ns-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
-  .ns-thumb{overflow:hidden;}
-  .ns-hero-info{flex:1; min-width:0;}
-  .ns-tag{display:inline-block; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:#8A6A3B; background:#F1E9DA; padding:3px 9px; border-radius:20px; margin-bottom:6px;}
-  .ns-hero-info h1{font-family:Georgia,serif; font-size:23px; font-weight:700; margin:0 0 4px; color:#20211E; line-height:1.15;}
-  .ns-sub{font-size:12.5px; color:#6B6A5F; margin-bottom:3px;}
-  .ns-dev{font-size:11.5px; color:#95937F;}
-  .ns-thumbstrip{display:grid; grid-template-columns:repeat(4,1fr); gap:6px; padding:0 28px 18px;}
-  .ns-thumb{aspect-ratio:4/3; border-radius:7px; background:#EDEAE2; display:flex; align-items:center; justify-content:center; color:#95937F; font-size:10px; font-weight:700;}
-  .ns-specs{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:#DCD7CA; margin:0 28px; border-radius:10px; overflow:hidden; border:1px solid #DCD7CA;}
-  .ns-spec{background:#fff; padding:12px 10px; display:flex; align-items:center; gap:8px;}
-  .ns-spec-ic{width:26px;height:26px; border-radius:7px; background:#F1E9DA; color:#8A6A3B; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
-  .ns-spec-ic svg{width:14px;height:14px;}
-  .ns-spec-val{font-weight:800; font-size:13.5px; line-height:1.2;}
-  .ns-spec-label{font-size:9.5px; color:#95937F; text-transform:uppercase; letter-spacing:.03em;}
-  .ns-extra{margin:18px 28px 0; border-top:1px solid #EDEAE2;}
-  .ns-extra-row{display:flex; justify-content:space-between; padding:8px 2px; font-size:12px; border-bottom:1px solid #EDEAE2;}
-  .ns-extra-row span:first-child{color:#6B6A5F;}
-  .ns-extra-row span:last-child{font-weight:700;}
-  .ns-pricing{margin:20px 28px; background:linear-gradient(135deg,#25505A,#1A3A42); border-radius:12px; padding:18px 22px; color:#fff; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;}
-  .ns-price-label{font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; opacity:.75; margin-bottom:3px;}
-  .ns-price-val{font-family:Georgia,serif; font-size:26px; font-weight:700;}
-  .ns-price-split{display:flex; gap:22px;}
-  .ns-price-sub{font-weight:700; font-size:13px;}
-  .ns-footer{padding:16px 28px 24px; border-top:1px solid #EDEAE2;}
-  .ns-agent{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
-  .ns-agent-avatar{width:32px;height:32px;border-radius:50%; background:#8A6A3B; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; flex-shrink:0;}
-  .ns-agent-name{font-weight:700; font-size:12.5px;}
-  .ns-agent-role{font-size:10.5px; color:#95937F;}
-  .ns-agent-contact{font-size:11px; color:#6B6A5F; margin-top:1px;}
-  .ns-disclaimer{font-size:9.5px; color:#95937F; line-height:1.5;}
-  @media print{ body{background:#fff; padding:0;} .ns-sheet{box-shadow:none; border:none; border-radius:0; max-width:100%;} }
+  .ns-sheet{--ink:#17191C; --frame:#121417; --gold:#CDAE7E; --gold-deep:#9A7442; --muted:#6E7076; --line:#E4E1DA; --canvas:#F3F2EE;
+    box-sizing:border-box; width:794px; height:1123px; position:relative; overflow:hidden; background:#fff; color:var(--ink);
+    font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif; font-variant-numeric:lining-nums;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact; text-align:left; line-height:1.35;}
+  .ns-sheet *{box-sizing:border-box;}
+  .ns-sheet svg{width:16px; height:16px;}
+  .ns-band{background:var(--frame); color:#ECE9E3; padding:34px 44px 92px; position:relative; overflow:hidden;}
+  .ns-nophoto .ns-band{padding-bottom:70px;}
+  .ns-band-ring{position:absolute; right:-150px; top:-190px; width:520px; height:520px; border-radius:50%; border:1px solid rgba(205,174,126,.22);}
+  .ns-band-ring::after{content:""; position:absolute; inset:90px; border-radius:50%; border:1px solid rgba(205,174,126,.14);}
+  .ns-header{display:flex; justify-content:space-between; align-items:center; position:relative;}
+  .ns-brand{display:flex; align-items:center; gap:12px;}
+  .ns-mark{width:42px; height:42px; border-radius:50%; border:1px solid var(--gold); color:var(--gold); display:flex; align-items:center; justify-content:center; font-family:'Bodoni Moda',Didot,'Times New Roman',serif; font-size:22px;}
+  .ns-brand-name{font-family:'Bodoni Moda',Didot,'Times New Roman',serif; font-size:23px; color:#fff; line-height:1.05;}
+  .ns-brand-sub{font-size:8.5px; font-weight:700; letter-spacing:.2em; text-transform:uppercase; color:var(--gold); margin-top:4px;}
+  .ns-doc-meta{text-align:right; font-size:11px; color:#B8B5AD; line-height:1.6;}
+  .ns-doc-kind{font-size:9px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:var(--gold);}
+  .ns-heading{position:relative; margin-top:40px; max-width:640px;}
+  .ns-tag{display:inline-block; font-size:9.5px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); border:1px solid rgba(205,174,126,.5); border-radius:999px; padding:5px 12px; margin-bottom:14px;}
+  .ns-heading h1{font-family:'Bodoni Moda',Didot,'Times New Roman',serif; font-weight:400; font-size:44px; line-height:1.04; margin:0 0 10px; color:#fff; letter-spacing:-.005em;}
+  .ns-heading h1.ns-title-long{font-size:34px;}
+  .ns-sub{font-size:13.5px; color:#D6D2CA; font-weight:600;}
+  .ns-dev{font-size:12px; color:#9C9A94; margin-top:4px;}
+  .ns-body{padding:0 44px; margin-top:-62px; position:relative;}
+  .ns-nophoto .ns-body{margin-top:-42px;}
+  .ns-gallery{display:grid; grid-template-columns:1.85fr 1fr; gap:8px; height:244px;}
+  .ns-gallery-single{grid-template-columns:1fr;}
+  .ns-hero-photo{height:100%; border-radius:16px; overflow:hidden; background:var(--canvas); box-shadow:0 10px 30px rgba(18,20,23,.18);}
+  .ns-hero-photo img, .ns-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  .ns-thumbstrip{display:grid; gap:8px; height:100%; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;}
+  .ns-thumbs-1{grid-template-columns:1fr; grid-template-rows:1fr;}
+  .ns-thumbs-2{grid-template-columns:1fr; grid-template-rows:1fr 1fr;}
+  .ns-thumbs-3 .ns-thumb:first-child{grid-column:span 2;}
+  .ns-thumb{border-radius:12px; overflow:hidden; background:var(--canvas); min-height:0;}
+  .ns-facts{display:grid; grid-template-columns:repeat(var(--n),1fr); gap:0; margin-top:14px; background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden;}
+  .ns-nophoto .ns-facts{margin-top:0; box-shadow:0 10px 30px rgba(18,20,23,.12);}
+  .ns-fact{display:flex; align-items:center; gap:11px; padding:14px 16px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); margin:0 -1px -1px 0;}
+  .ns-fact-ic{width:32px; height:32px; border-radius:50%; background:#F5EDE0; color:var(--gold-deep); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .ns-fact-val{font-family:'Bodoni Moda',Didot,'Times New Roman',serif; font-size:21px; line-height:1.1;}
+  .ns-fact-label{font-size:9.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:2px;}
+  .ns-cols{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:14px; align-items:start;}
+  .ns-section-label{font-size:9.5px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:10px;}
+  .ns-price{background:var(--frame); color:#ECE9E3; border-radius:16px; padding:20px 22px;}
+  .ns-price .ns-section-label{color:var(--gold);}
+  .ns-price-label{font-size:11px; color:#B8B5AD; font-weight:600;}
+  .ns-price-val{font-family:'Bodoni Moda',Didot,'Times New Roman',serif; font-size:33px; color:#fff; line-height:1.1; margin:2px 0 6px; white-space:nowrap;}
+  .ns-pay{border-top:1px solid rgba(255,255,255,.12); margin-top:8px;}
+  .ns-pay-row{display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid rgba(255,255,255,.08); font-size:12.5px;}
+  .ns-pay-row:last-child{border-bottom:0; padding-bottom:0;}
+  .ns-pay-row span{color:#B8B5AD;}
+  .ns-pay-row b{color:#fff; font-weight:700; white-space:nowrap;}
+  .ns-details{border:1px solid var(--line); border-radius:16px; padding:18px 20px;}
+  .ns-detail-row{display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); font-size:12.5px;}
+  .ns-detail-row:last-child{border-bottom:0;}
+  .ns-detail-row span{color:var(--muted);}
+  .ns-detail-row b{font-weight:700; text-align:right;}
+  .ns-footer{position:absolute; left:0; right:0; bottom:0; padding:18px 44px 26px; background:var(--canvas); border-top:1px solid var(--line);}
+  .ns-agent{display:flex; align-items:center; gap:12px; margin-bottom:12px;}
+  .ns-agent-avatar{width:38px; height:38px; border-radius:50%; background:var(--frame); color:var(--gold); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; flex-shrink:0;}
+  .ns-agent-kicker{font-size:9px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:var(--gold-deep);}
+  .ns-agent-name{font-weight:800; font-size:14px; margin-top:1px;}
+  .ns-agent-name span{font-weight:600; color:var(--muted);}
+  .ns-agent-contact{font-size:12px; color:var(--ink); margin-top:2px; font-weight:600;}
+  .ns-disclaimer{font-size:9px; color:var(--muted); line-height:1.5;}
+  /* in-app preview: the real A4 sheet, scaled to the modal width (see fitUnitSheetPreview) */
+  .ns-preview{position:relative; overflow:hidden; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.14);}
+  .ns-preview .ns-sheet{transform-origin:top left; position:absolute; left:0; top:0;}
 `;
+// The print window: just the sheet, A4, no margins, nothing else on the page.
+const UNIT_SHEET_PRINT_CSS = `
+  @page{size:A4; margin:0;}
+  html,body{margin:0; padding:0;}
+  body{background:#E9E7E2; display:flex; justify-content:center; padding:24px 0;}
+  .ns-sheet{box-shadow:0 10px 40px rgba(0,0,0,.18);}
+  @media print{ body{background:#fff; padding:0; display:block;} .ns-sheet{box-shadow:none; width:210mm; height:297mm;} }
+`;
+function ensureUnitSheetStyles(){
+  if(document.getElementById('nsSheetStyles')) return;
+  const st = document.createElement('style'); st.id = 'nsSheetStyles'; st.textContent = UNIT_SHEET_CSS;
+  document.head.appendChild(st);
+}
+function fitUnitSheetPreview(){
+  const box = document.getElementById('nsPreview'); if(!box) return;
+  const sheet = box.querySelector('.ns-sheet'); if(!sheet) return;
+  const k = box.clientWidth / 794;
+  sheet.style.transform = `scale(${k})`;
+  box.style.height = Math.ceil(1123 * k) + 'px';
+}
+function unitSheetDocument(un, sp, dataUrls){
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<title>New Avenue — '+esc(un.compound)+'</title>'
+    + '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">'
+    + '<style>'+UNIT_SHEET_CSS+UNIT_SHEET_PRINT_CSS+'</style></head><body>'+unitSheetHTML(un,sp,dataUrls)+'</body></html>';
+}
 function openUnitPdfPreview(un, sp){
+  ensureUnitSheetStyles();
   openModal(`
-    <div class="modal-head"><div style="font-weight:800;">Unit property sheet</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
+    <div class="modal-head"><div><div style="font-weight:800;">Property brochure</div><div style="font-size:11.5px; color:var(--text-faint);">A4 · ready to save as PDF and share with your client</div></div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
     <div class="modal-body" id="pdfArea" style="background:var(--surface-2); padding:18px;">
-      ${unitSheetHTML(un, sp)}
+      <div class="ns-preview" id="nsPreview">${unitSheetHTML(un, sp)}</div>
     </div>
     <div class="modal-foot">
       <a class="btn btn-sm" style="background:#25D366; border-color:#25D366; color:#fff;" id="pdfWaShareBtn">${ic('whatsapp')} Share on WhatsApp</a>
       <button class="btn btn-primary btn-sm" id="printPdfBtn">${ic('pdf')} Print / Save as PDF</button>
     </div>`);
+  fitUnitSheetPreview();
+  const onResize = ()=>{ if(!document.getElementById('nsPreview')) window.removeEventListener('resize', onResize); else fitUnitSheetPreview(); };
+  window.addEventListener('resize', onResize);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
   document.getElementById('printPdfBtn').addEventListener('click', async ()=>{
     const w = window.open('', '_blank');
-    if(!w){ toast('Allow pop-ups to print or save the sheet'); return; }
+    if(!w){ toast('Allow pop-ups to print or save the brochure'); return; }
     // The new window cannot log in, so the photos are embedded as data: URLs before printing.
     const dataUrls = {};
-    const ids = un.photoIds || [];
+    const ids = (un.photoIds || []).slice(0,5);
     try {
-      await Promise.all([[ids[0],'full'], ...ids.slice(1,5).map(id=>[id,'thumb'])].filter(x=>x[0]).map(async ([id,size])=>{ dataUrls[id+'|'+size] = await photoDataUrl(id, size); }));
-    } catch(e){ toast('Some photos could not be loaded — the sheet will print without them'); }
-    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>New Avenue — '+esc(un.compound)+'</title><style>'+UNIT_SHEET_CSS+'</style></head><body>'+unitSheetHTML(un,sp,dataUrls)+'</body></html>');
+      await Promise.all([[ids[0],'full'], ...ids.slice(1).map(id=>[id,'thumb'])].filter(x=>x[0]).map(async ([id,size])=>{ dataUrls[id+'|'+size] = await photoDataUrl(id, size); }));
+    } catch(e){ toast('Some photos could not be loaded — the brochure will print without them'); }
+    w.document.write(unitSheetDocument(un, sp, dataUrls));
     w.document.close(); w.focus();
     const imgs = Array.from(w.document.images);
-    Promise.all(imgs.map(im=> im.complete ? 0 : new Promise(r=>{ im.onload = im.onerror = r; }))).then(()=> setTimeout(()=>w.print(), 200));
+    const imagesReady = Promise.all(imgs.map(im=> im.complete ? 0 : new Promise(r=>{ im.onload = im.onerror = r; })));
+    // Wait for the brand fonts too (but never longer than 2.5 s — offline, the system fonts are used).
+    const fontsReady = (w.document.fonts && w.document.fonts.ready) ? Promise.race([w.document.fonts.ready, new Promise(r=>setTimeout(r, 2500))]) : Promise.resolve();
+    Promise.all([imagesReady, fontsReady]).then(()=> setTimeout(()=>w.print(), 150));
   });
   document.getElementById('pdfWaShareBtn').addEventListener('click', (e)=>{
     e.preventDefault();
-    const msg = encodeURIComponent('New Avenue — '+un.compound+' ('+un.unitType+'), '+un.area+'. '+fmtMoney(un.totalPrice)+'. Ask me for the full sheet!');
+    const msg = encodeURIComponent('New Avenue — '+un.compound+' ('+un.unitType+'), '+un.area+'. '+fmtMoney(un.totalPrice)+'. Ask me for the full brochure!');
     window.open('https://wa.me/?text='+msg, '_blank');
   });
 }
-
 
 
 /* ---------- Full-size photo viewer (Module F) ---------- */

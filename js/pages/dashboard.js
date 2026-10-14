@@ -10,17 +10,10 @@ function renderDashboard(u){
   const recentReq = reqList.slice(-3).reverse();
   const envLabel = teamKey[0].toUpperCase()+teamKey.slice(1);
 
-  // Inventory at a glance — counts read from the same visible inventory the News Feed shows.
-  const weekAgo = Date.now() - 7*86400000;
-  const newThisWeek = allUnits.filter(x=>x.createdAt && x.createdAt>=weekAgo).length;
-  const immediate = allUnits.filter(x=>x.deliveryYears===0).length;
-  const pendingCount = allUnits.filter(x=>x.pending).length;
-  const kpis = `<div class="dash-kpis">
-    <div class="card dash-kpi"><b>${allUnits.length.toLocaleString('en-US')}</b><span>Live units · ${esc(envLabel)}</span></div>
-    <div class="card dash-kpi"><b>${newThisWeek}</b><span>New this week</span></div>
-    <div class="card dash-kpi"><b>${immediate}</b><span>Immediate delivery</span></div>
-    <div class="card dash-kpi"><b>${pendingCount}</b><span>Pending admin review</span></div>
-  </div>`;
+  // Shortcuts — what a salesperson can act on now, each read from data the app already loads
+  // (own units, own owner relationships and their 30-day update cycle, the server's unread
+  // counts). Every tile opens the page where the action happens. No invented numbers.
+  const kpis = dashboardShortcutsHTML(u, unread);
 
   // "Your day" — the same Daily Report status the old banner showed, as a progress card.
   let dayCard;
@@ -101,19 +94,7 @@ function renderDashboard(u){
     </div>`;
   }
 
-  let adminCard = '';
-  if(isAdmin(u)){
-    const pendingUnits = DB.units.filter(x=>x.pending && !x.deletedAt).length;
-    const pendingTransfers = DB.transfers.filter(t=>t.status==='pending').length;
-    adminCard = `<div class="card">
-      <div class="card-head"><h3>Admin queue</h3><small>Needs review</small></div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:4px 20px 6px;">
-        <div class="dash-kpi" style="background:var(--surface-2); border-radius:14px;"><b>${pendingUnits}</b><span>Units pending review</span></div>
-        <div class="dash-kpi" style="background:var(--surface-2); border-radius:14px;"><b>${pendingTransfers}</b><span>Owner transfer requests</span></div>
-      </div>
-      <div class="card-foot" style="border:0;"><button class="btn btn-primary btn-sm" data-nav="admin" style="width:100%; justify-content:center;">Go to Admin panel</button></div>
-    </div>`;
-  }
+  const adminCard = '';   // the admin queue now lives in the shortcut tiles above (see dashboardShortcutsHTML)
 
   const third = (teamCard || adminCard) ? `<div class="dash-col">${teamCard}${adminCard}</div>` : '';
   return `${kpis}<div class="dash-grid${third?'':' two'}">
@@ -121,6 +102,63 @@ function renderDashboard(u){
     <div class="dash-col">${newsCard}${referencesCard}</div>
     ${third}
   </div>`;
+}
+
+/* ---------- Dashboard shortcut tiles ---------- */
+function dashTile({nav, value, label, sub, tone, id, adminTab}){
+  return `<button type="button" class="card dash-kpi dash-link" data-nav="${nav}" ${adminTab?`data-goadmintab="${adminTab}"`:''} ${id?`id="${id}"`:''}>
+    <span class="dk-top"><b>${value}</b>${ic('chevron')}</span>
+    <span class="dk-label">${label}</span>
+    <span class="dk-sub ${tone||''}">${sub}</span>
+  </button>`;
+}
+function dashboardShortcutsHTML(u, unreadReq){
+  const tiles = [];
+  const notif = unreadNotifCount(u);
+  if(isSalesActive(u)){
+    const mine = myUnits(u);
+    const minePending = mine.filter(x=>x.pending).length;
+    tiles.push(dashTile({ nav:'myunits', id:'dashTileUnits', value:mine.length, label:'My Units',
+      sub: minePending ? `${minePending} awaiting admin review` : (mine.length ? 'All live in the News Feed' : 'Add your first unit'), tone: minePending?'warn':'' }));
+    // Owner follow-ups: each owner↔unit relationship needs an update every 30 days
+    // (soon = 28+ days, overdue = 30+ days — the same rule the Owners page uses).
+    const rels = ownerUnitsForSalesperson(u.id);
+    const overdue = rels.filter(r=>ownerExpiryState(r.lastUpdateAt)==='expired').length;
+    const soon = rels.filter(r=>ownerExpiryState(r.lastUpdateAt)==='soon').length;
+    const owners = myOwners(u).length;
+    tiles.push(dashTile({ nav:'owners', id:'dashTileOwners', value:overdue+soon, label:'Owner follow-ups due',
+      sub: overdue ? `${overdue} overdue${soon?` · ${soon} due soon`:''}` : soon ? `${soon} due within 2 days` : `${owners} owner${owners===1?'':'s'} · all up to date`,
+      tone: overdue?'bad':soon?'warn':'good' }));
+  }
+  if(isAdmin(u)){
+    const pendingUnits = DB.units.filter(x=>x.pending && !x.deletedAt).length;
+    tiles.push(dashTile({ nav:'admin', adminTab:'units', id:'dashTileReview', value:pendingUnits, label:'Units to review',
+      sub: pendingUnits ? 'Waiting for approval' : 'Review queue is clear', tone: pendingUnits?'warn':'good' }));
+    if(u.role==='senioradmin' || u.role==='headadmin'){   // the only roles the server sends transfer requests to
+      const pendingTransfers = DB.transfers.filter(t=>t.status==='pending').length;
+      tiles.push(dashTile({ nav:'admin', adminTab:'transfers', id:'dashTileTransfers', value:pendingTransfers, label:'Owner requests',
+        sub: pendingTransfers ? 'Claims / transfers to decide' : 'Nothing to decide', tone: pendingTransfers?'warn':'good' }));
+    }
+  }
+  if(isHeadHR(u)){
+    const sent = DB.announcements.length;
+    tiles.push(dashTile({ nav:'announcements', id:'dashTileAnnouncements', value:sent, label:'Announcements sent', sub:'Write a new announcement' }));
+  }
+  tiles.push(dashTile({ nav:'requests', id:'dashTileRequests', value:unreadReq, label:'Unread requests',
+    sub: unreadReq ? 'New in your team feed' : 'You’re up to date', tone: unreadReq?'warn':'good' }));
+  tiles.push(dashTile({ nav:'notifications', id:'dashTileNotifs', value:notif, label:'Notifications',
+    sub: notif ? 'Unread' : 'Nothing new', tone: notif?'warn':'good' }));
+
+  // Quick actions — they open the existing screens (and their existing permission checks).
+  const actions = [];
+  if(isSalesActive(u)){
+    actions.push(`<button type="button" class="qa-btn" id="qaAddUnit">${ic('plus')} Add unit</button>`);
+    actions.push(`<button type="button" class="qa-btn" id="qaAddOwner">${ic('owners')} Add owner</button>`);
+  }
+  actions.push(`<button type="button" class="qa-btn" id="qaPostRequest">${ic('requests')} Post a request</button>`);
+  actions.push(`<button type="button" class="qa-btn" data-nav="inventory">${ic('inventory')} Browse News Feed</button>`);
+  return `<div class="dash-kpis" style="--tiles:${tiles.length}">${tiles.join('')}</div>
+    <div class="quick-actions" aria-label="Quick actions">${actions.join('')}</div>`;
 }
 
 /* =========================================================
@@ -135,19 +173,23 @@ function renderDashboard(u){
    directory" goes to the complete Reference page for everyone else.
    ========================================================= */
 function renderDashboardReferencesCard(u, teamKey){
+  return `<div class="card">
+    <div class="card-head"><h3>Reference</h3><button class="link" data-nav="reference">Full directory ${ic('chevron')}</button></div>
+    <div class="search-field" style="margin:0 20px 10px;">
+      ${ic('search')}<input id="dashRefSearch" type="search" placeholder="Search by name or reference code…" value="${esc(session._dashRefSearch||'')}" autocomplete="off" aria-label="Search the reference directory">
+    </div>
+    <div id="dashRefResults">${dashboardRefResultsHTML(teamKey)}</div>
+  </div>`;
+}
+// Just the matching people — refreshed on its own while typing so the search box keeps focus.
+function dashboardRefResultsHTML(teamKey){
   const q = (session._dashRefSearch||'').trim().toLowerCase();
   let list = DB.refs.filter(r=>r.team===teamKey).map(r=>({r, person: refUser(r)})).filter(x=>x.person);
   if(q) list = list.filter(({r,person})=> person.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q));
   list = list.slice().sort((a,b)=>a.person.name.localeCompare(b.person.name));
   const shown = list.slice(0,4);
-  return `<div class="card">
-    <div class="card-head"><h3>Reference</h3><button class="link" data-nav="reference">Full directory ${ic('chevron')}</button></div>
-    <div class="search-field" style="margin:0 20px 10px;">
-      ${ic('search')}<input id="dashRefSearch" placeholder="Search by name or reference code…" value="${esc(session._dashRefSearch||'')}">
-    </div>
-    ${shown.length? shown.map(({r,person})=>dashboardRefRow(r,person)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
-    ${list.length>shown.length ? `<div style="font-size:12px; color:var(--text-faint); padding:8px 20px 14px;">+${list.length-shown.length} more in the full directory</div>` : '<div style="height:6px"></div>'}
-  </div>`;
+  return `${shown.length? shown.map(({r,person})=>dashboardRefRow(r,person)).join('') : emptyRow(q?'No one matches that search.':'No directory entries yet.')}
+    ${list.length>shown.length ? `<div style="font-size:12px; color:var(--text-faint); padding:8px 20px 14px;">+${list.length-shown.length} more in the full directory</div>` : '<div style="height:6px"></div>'}`;
 }
 function dashboardRefRow(r,person){
   return `<div class="list-row" style="padding:9px 20px;">
@@ -166,14 +208,21 @@ function unitMiniRow(un){
 }
 function emptyRow(text){ return `<div style="padding:16px 20px; font-size:12.5px; color:var(--text-faint); text-align:center;">${text}</div>`; }
 AFTER_RENDER.dashboard = function(u){
+  const qaU = document.getElementById('qaAddUnit');
+  if(qaU) qaU.addEventListener('click', ()=>{ session._unitsScope = 'my'; go('myunits'); const b = document.getElementById('addUnitBtn'); if(b && !b.disabled) b.click(); });
+  const qaO = document.getElementById('qaAddOwner');
+  if(qaO) qaO.addEventListener('click', ()=>{ session._ownersScope = 'my'; go('owners'); const b = document.getElementById('addOwnerBtn'); if(b && !b.disabled) b.click(); else if(b) toast(b.title || 'You cannot add an owner right now'); });
+  const qaR = document.getElementById('qaPostRequest');
+  if(qaR) qaR.addEventListener('click', ()=>{ go('requests'); const i = document.getElementById('reqInput'); if(i) i.focus(); });
   document.querySelectorAll('.unit-mini').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
-  document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=> go(b.dataset.nav)));
+  document.querySelectorAll('[data-nav]').forEach(b=> b.addEventListener('click', ()=>{ if(b.dataset.goadmintab) session._adminTab = b.dataset.goadmintab; go(b.dataset.nav); }));
   const rs = document.getElementById('dashRefSearch');
   if(rs){
-    rs.addEventListener('input', ()=>{ session._dashRefSearch = rs.value; renderPageInto(u); });
-    if(session._dashRefSearchFocused){ rs.focus(); rs.setSelectionRange(rs.value.length, rs.value.length); }
-    rs.addEventListener('focus', ()=>{ session._dashRefSearchFocused = true; });
-    rs.addEventListener('blur', ()=>{ session._dashRefSearchFocused = false; });
+    rs.addEventListener('input', ()=>{
+      session._dashRefSearch = rs.value;
+      const box = document.getElementById('dashRefResults');
+      if(box) box.innerHTML = dashboardRefResultsHTML(myTeamKey(u));
+    });
   }
 };
 

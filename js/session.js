@@ -15,7 +15,7 @@ function blankInvFilters(){ return {bedrooms:[],bathrooms:[],unitType:[],finishi
 // The Daily Report module launches 2026-11-01 — before that date, real usage shows a
 // "coming soon" notice. `effectiveTodayStr` lets a user explicitly preview the module
 // using a simulated date (see the Daily Reports page) without changing the real clock or
-// affecting any other part of the app; nothing else in New Avenue 1 reads session.simToday.
+// affecting any other part of the app; nothing else in New Avenue reads session.simToday.
 function effectiveTodayStr(){ return session.simToday || todayStr(); }
 
 function currentUser(){ return DB.users.find(u=>u.id===session.userId); }

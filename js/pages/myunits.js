@@ -13,13 +13,14 @@ function renderMyUnitsPage(u){
     </div>` : '';
   return `
   ${scopeTabs}
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+  <div class="results-bar">
     <div class="section-sub" style="margin-bottom:0;">${list.length} unit${list.length===1?'':'s'}${scope==='my'?' belong to you':' across your team'}</div>
-    ${scope==='my'?`<button class="btn btn-primary btn-sm" id="addUnitBtn">${ic('plus')} Add new unit</button>`:''}
+    <div style="display:flex; align-items:center; gap:10px;">
+      ${list.length ? unitViewSwitcherHTML() : ''}
+      ${scope==='my'?`<button class="btn btn-primary btn-sm" id="addUnitBtn">${ic('plus')} Add new unit</button>`:''}
+    </div>
   </div>
-  <div class="grid-3">
-    ${list.length? list.map(un=>myUnitCardWrap(un, scope==='my')).join('') : `<div class="empty-state" style="grid-column:1/-1;">${ic('myunits')}<div>${scope==='my'?"You don't have any units yet.":'No units from your team yet.'}</div></div>`}
-  </div>`;
+  ${list.length ? unitCollectionHTML(list, un=>myUnitCardWrap(un, scope==='my')) : `<div class="grid-3"><div class="empty-state" style="grid-column:1/-1;">${ic('myunits')}<div>${scope==='my'?"You don't have any units yet.":'No units from your team yet.'}</div></div></div>`}`;
 }
 // PART 2 — Edit Units in My Units: wraps the existing unitCard() (clicking it still opens the
 // normal view-only detail modal, unchanged) with a clearly visible Edit / Delete action row,
@@ -27,6 +28,17 @@ function renderMyUnitsPage(u){
 // actions aren't the viewer's to take). The action row is a SIBLING of the card, not nested
 // inside it, so these buttons never trigger the card's own "open detail modal" click handler.
 function myUnitCardWrap(un, mine){
+  if(unitViewMode()==='list'){
+    // List view: the same row as the News Feed, with this user's Edit / Delete beside it (still a
+    // sibling of the card, so the buttons never open the detail modal).
+    return `<div class="unit-row-wrap">
+      ${unitRow(un)}
+      ${mine ? `<div class="ur-actions">
+        <button class="btn btn-sm" data-editunit="${un.id}">${ic('edit')} Edit</button>
+        <button class="btn btn-sm btn-danger" data-deleteunit="${un.id}">${ic('x')} Delete</button>
+      </div>` : ''}
+    </div>`;
+  }
   return `<div>
     ${unitCard(un)}
     ${mine ? `<div style="display:flex; gap:8px; margin-top:8px;">
@@ -37,6 +49,7 @@ function myUnitCardWrap(un, mine){
 }
 AFTER_RENDER.myunits = function(u){
   document.querySelectorAll('[data-unitsscope]').forEach(b=> b.addEventListener('click', ()=>{ session._unitsScope=b.dataset.unitsscope; renderPageInto(u); }));
+  bindUnitViewSwitcher(()=> renderPageInto(u));
   document.querySelectorAll('.unit-card').forEach(el=> el.addEventListener('click', ()=> openUnitModal(el.dataset.unit, u)));
   const ab = document.getElementById('addUnitBtn'); if(ab) ab.addEventListener('click', ()=> openAddUnitModal(u));
   document.querySelectorAll('[data-editunit]').forEach(b=> b.addEventListener('click', (e)=>{ e.stopPropagation(); openEditUnitModal(b.dataset.editunit, u); }));

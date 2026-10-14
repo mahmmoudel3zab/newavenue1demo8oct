@@ -45,6 +45,27 @@ const ADMIN_ROLE_FILTER_GROUPS = [
 ];
 function renderAdminUsers(u){
   const canManage = canManageUsers(u);
+  const roleFilter = session._adminRoleFilter || '';
+  const reviewOnly = !!session._adminReviewOnly;
+  const reviewCount = DB.users.filter(x=>x.titleNeedsReview).length;
+  return `
+  <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
+    <div class="search-field" style="flex:1; min-width:200px;">
+      ${ic('search')}<input id="adminUserSearch" type="search" placeholder="Search by name or reference code…" value="${esc(session._adminUserSearch||'')}" autocomplete="off" aria-label="Search users">
+    </div>
+    <select id="adminRoleFilter" style="width:auto;">${ADMIN_ROLE_FILTER_GROUPS.map(([v,l])=>`<option value="${v}" ${roleFilter===v?'selected':''}>${l}</option>`).join('')}</select>
+    ${canManage?`<button class="btn btn-primary btn-sm" id="addSalesUserBtn">${ic('plus')} Add sales user</button>`:''}
+  </div>
+  ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department, job title and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
+  ${reviewCount? `<div class="card card-pad" style="margin-bottom:14px; background:var(--warning-tint); border-color:var(--warning); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <div style="flex:1 1 260px; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
+    <button class="btn btn-sm ${reviewOnly?'btn-primary':''}" id="toggleReviewOnlyBtn">${reviewOnly?'Showing review-only — show all':'Show accounts needing review'}</button>
+  </div>` : ''}
+  <div class="card" style="overflow-x:auto;" id="adminUsersTable">${adminUsersTableHTML(u)}</div>`;
+}
+// The users table on its own — refreshed by itself while searching so the search box keeps focus.
+function adminUsersTableHTML(u){
+  const canManage = canManageUsers(u);
   const q = (session._adminUserSearch||'').trim().toLowerCase();
   const roleFilter = session._adminRoleFilter || '';
   const reviewOnly = !!session._adminReviewOnly;
@@ -58,21 +79,7 @@ function renderAdminUsers(u){
     });
   }
   list = list.slice().sort((a,b)=>a.name.localeCompare(b.name));
-  const reviewCount = DB.users.filter(x=>x.titleNeedsReview).length;
-  return `
-  <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
-    <div class="search-field" style="flex:1; min-width:200px;">
-      ${ic('search')}<input id="adminUserSearch" placeholder="Search by name or reference code…" value="${esc(session._adminUserSearch||'')}">
-    </div>
-    <select id="adminRoleFilter" style="width:auto;">${ADMIN_ROLE_FILTER_GROUPS.map(([v,l])=>`<option value="${v}" ${roleFilter===v?'selected':''}>${l}</option>`).join('')}</select>
-    ${canManage?`<button class="btn btn-primary btn-sm" id="addSalesUserBtn">${ic('plus')} Add sales user</button>`:''}
-  </div>
-  ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department, job title and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
-  ${reviewCount? `<div class="card card-pad" style="margin-bottom:14px; background:var(--warning-tint); border-color:var(--warning); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-    <div style="flex:1 1 260px; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
-    <button class="btn btn-sm ${reviewOnly?'btn-primary':''}" id="toggleReviewOnlyBtn">${reviewOnly?'Showing review-only — show all':'Show accounts needing review'}</button>
-  </div>` : ''}
-  <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Name</th><th>Role</th><th>Job Title</th><th>Department</th><th>Reports to</th><th>Reference</th>${canManage?'<th></th>':''}</tr></thead><tbody>
+  return `<table><thead><tr><th>Name</th><th>Role</th><th>Job Title</th><th>Department</th><th>Reports to</th><th>Reference</th>${canManage?'<th></th>':''}</tr></thead><tbody>
   ${list.length? list.map(x=>{
     const mgr = DB.users.find(m=>m.id===x.managerId);
     const ref = DB.refs.find(r=>r.userId===x.id);
@@ -86,7 +93,7 @@ function renderAdminUsers(u){
       ${canManage?`<td><button class="btn btn-sm" data-manageuser="${x.id}">Manage</button></td>`:''}
     </tr>`;
   }).join('') : `<tr><td colspan="7">${emptyRow('No users match this search/filter.')}</td></tr>`}
-  </tbody></table></div>`;
+  </tbody></table>`;
 }
 
 function roleTeamApplicable(role){ return ['salesperson','teamleader','manager','director'].includes(role); }
@@ -425,18 +432,21 @@ function renderAdminAvailablePool(u){
    excluding whoever currently holds it), and confirm before the transfer happens.
    ========================================================= */
 function renderAdminOwnerTransfer(u){
+  return `
+  <div class="section-sub">Search for an owner (company-wide), then choose a destination salesperson to transfer them to. This moves every unit/relationship currently held by the owner's current salesperson — nothing is duplicated or lost.</div>
+  <div class="search-field" style="max-width:420px; margin-bottom:14px;">
+    ${ic('search')}<input id="ownerTransferSearch" type="search" placeholder="Search owner by name or phone…" value="${esc(session._ownerTransferSearch||'')}" autocomplete="off" aria-label="Search owners">
+  </div>
+  <div class="card" id="ownerTransferResults">${ownerTransferResultsHTML()}</div>`;
+}
+// Matching owners only — refreshed on its own while typing.
+function ownerTransferResultsHTML(){
   const q = (session._ownerTransferSearch||'').trim().toLowerCase();
   let results = [];
   if(q){
     results = DB.owners.filter(o=> !o.deletedAt && (o.name.toLowerCase().includes(q) || phoneLocalDisplay(o.phone).includes(q) || (o.phone2 && phoneLocalDisplay(o.phone2).includes(q)))).slice(0,25);
   }
-  return `
-  <div class="section-sub">Search for an owner (company-wide), then choose a destination salesperson to transfer them to. This moves every unit/relationship currently held by the owner's current salesperson — nothing is duplicated or lost.</div>
-  <div class="search-field" style="max-width:420px; margin-bottom:14px;">
-    ${ic('search')}<input id="ownerTransferSearch" placeholder="Search owner by name or phone…" value="${esc(session._ownerTransferSearch||'')}">
-  </div>
-  <div class="card">
-    ${!q ? emptyRow('Type a name or phone number to find an owner.') : (results.length? results.map(o=>{
+  return `${!q ? emptyRow('Type a name or phone number to find an owner.') : (results.length? results.map(o=>{
       const rels = activeOwnerUnitsFor(o.id);
       const holderIds = ownerCurrentHolderIds(o);
       const holders = holderIds.map(id=>DB.users.find(x=>x.id===id)).filter(Boolean);
@@ -448,8 +458,7 @@ function renderAdminOwnerTransfer(u){
         </div>
         <button class="btn btn-sm btn-primary" data-starttransfer="${o.id}">${ic('team')} Transfer…</button>
       </div>`;
-    }).join('') : emptyRow('No owners match that search.'))}
-  </div>`;
+    }).join('') : emptyRow('No owners match that search.'))}`;
 }
 function openOwnerTransferModal(ownerId, u){
   const o = DB.owners.find(x=>x.id===ownerId);
@@ -518,15 +527,17 @@ AFTER_RENDER.admin = function(u){
   document.querySelectorAll('[data-admintab]').forEach(b=> b.addEventListener('click', ()=>{ session._adminTab=b.dataset.admintab; if(b.dataset.admintab==='audit') session._auditFetchedAt=0; renderPageInto(u); }));
   const us = document.getElementById('adminUserSearch');
   if(us){
-    us.addEventListener('input', ()=>{ session._adminUserSearch = us.value; renderPageInto(u); });
-    if(session._adminUserSearchFocused){ us.focus(); us.setSelectionRange(us.value.length, us.value.length); }
-    us.addEventListener('focus', ()=>{ session._adminUserSearchFocused = true; });
-    us.addEventListener('blur', ()=>{ session._adminUserSearchFocused = false; });
+    // Only the table is refreshed while typing — the search box is never re-created.
+    us.addEventListener('input', ()=>{
+      session._adminUserSearch = us.value;
+      const box = document.getElementById('adminUsersTable');
+      if(box){ box.innerHTML = adminUsersTableHTML(u); bindAdminUserRows(u); }
+    });
   }
   const rf = document.getElementById('adminRoleFilter'); if(rf) rf.addEventListener('change', ()=>{ session._adminRoleFilter = rf.value; renderPageInto(u); });
   const trb = document.getElementById('toggleReviewOnlyBtn'); if(trb) trb.addEventListener('click', ()=>{ session._adminReviewOnly = !session._adminReviewOnly; renderPageInto(u); });
   const au = document.getElementById('addSalesUserBtn'); if(au) au.addEventListener('click', ()=> openAddSalesUserModal(u));
-  document.querySelectorAll('[data-manageuser]').forEach(b=> b.addEventListener('click', ()=> openUserAdminModal(b.dataset.manageuser, u)));
+  bindAdminUserRows(u);
   document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', async ()=>{
     try { await NA1_API.post('/admin/units/'+encodeURIComponent(b.dataset.approveunit)+'/approve', {}); }
     catch(e){ reportUnitWriteError(e, 'approve this unit'); return; }
@@ -580,13 +591,20 @@ AFTER_RENDER.admin = function(u){
     await hydrateOwnersAndUnitsFromServer(u);
     toast('Relationship reassigned'); renderPageInto(u);
   }));
-  document.querySelectorAll('[data-starttransfer]').forEach(b=> b.addEventListener('click', ()=> openOwnerTransferModal(b.dataset.starttransfer, u)));
+  bindOwnerTransferRows(u);
   const ots = document.getElementById('ownerTransferSearch');
   if(ots){
-    ots.addEventListener('input', ()=>{ session._ownerTransferSearch = ots.value; renderPageInto(u); });
-    if(session._ownerTransferSearchFocused){ ots.focus(); ots.setSelectionRange(ots.value.length, ots.value.length); }
-    ots.addEventListener('focus', ()=>{ session._ownerTransferSearchFocused = true; });
-    ots.addEventListener('blur', ()=>{ session._ownerTransferSearchFocused = false; });
+    ots.addEventListener('input', ()=>{
+      session._ownerTransferSearch = ots.value;
+      const box = document.getElementById('ownerTransferResults');
+      if(box){ box.innerHTML = ownerTransferResultsHTML(); bindOwnerTransferRows(u); }
+    });
   }
 };
+function bindAdminUserRows(u){
+  document.querySelectorAll('[data-manageuser]').forEach(b=> b.addEventListener('click', ()=> openUserAdminModal(b.dataset.manageuser, u)));
+}
+function bindOwnerTransferRows(u){
+  document.querySelectorAll('[data-starttransfer]').forEach(b=> b.addEventListener('click', ()=> openOwnerTransferModal(b.dataset.starttransfer, u)));
+}
 

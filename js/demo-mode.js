@@ -150,7 +150,7 @@
     var s = getStore();
     if (!s.notifications.some(function (n) { return n.userId === u.id; })) {
       s.notifications.push({ id: 'n_demo_' + u.id, userId: u.id, type: 'system', link: null, is_read: 0, at: Date.now(), dedup_key: 'demo_welcome', meta: null,
-        text: 'Welcome to the New Avenue 1 Frontend Demo. You are viewing sample data — nothing you do here is saved to a server.' });
+        text: 'Welcome to the New Avenue Frontend Demo. You are viewing sample data — nothing you do here is saved to a server.' });
       save();
     }
     var mine = s.notifications.filter(function (n) { return n.userId === u.id; }).sort(function (a, b) { return b.at - a.at; });

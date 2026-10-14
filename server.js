@@ -1,5 +1,5 @@
 /**
- * New Avenue 1 — local static server.
+ * New Avenue — local static server.
  *
  * No npm packages required: this uses only Node's built-in modules, so
  * `npm install` has nothing to download and the app works even offline
@@ -80,7 +80,7 @@ function getLanAddresses() {
 server.listen(PORT, '0.0.0.0', () => {
   const lan = getLanAddresses();
   console.log('');
-  console.log('  New Avenue 1 is running.');
+  console.log('  New Avenue is running.');
   console.log('  --------------------------------------------');
   console.log(`  On this computer:   http://localhost:${PORT}`);
   if (lan.length) {

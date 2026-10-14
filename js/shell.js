@@ -29,7 +29,9 @@ const LOGIN_GROUPS = [
   {label:'Administration', ids:['ja1','sa1','ha1']},
   {label:'Human Resources', ids:['hr1']},
 ];
-function renderLogin(){
+// The demo-account list on its own, so the account search can refresh just the list while the
+// search box (and the email/password typed above it) stay untouched.
+function loginListInnerHTML(){
   const q = (session._loginSearch||'').trim().toLowerCase();
   const matches = (u)=> !q || u.name.toLowerCase().includes(q) || displayTitle(u).toLowerCase().includes(q);
   // Demo Mode always lists the built-in demo roster, never a copy left in this browser's storage
@@ -51,6 +53,9 @@ function renderLogin(){
     if(!cards) return '';
     return `<div class="login-group"><div class="login-group-label">${g.label}</div>${cards}</div>`;
   }).join('');
+  return groupsHTML || `<div class="empty-state" style="padding:26px 10px;">${ic('search')}<div>No accounts match “${esc(session._loginSearch||'')}”.</div></div>`;
+}
+function renderLogin(){
   // Demo-account quick-fill (names/emails of the prototype's accounts) is for demos only. A real
   // deployment sets window.NA1_SHOW_DEMO_ACCOUNTS = false (see index.html) to hide the whole list.
   const showDemoAccounts = window.NA1_SHOW_DEMO_ACCOUNTS !== false;
@@ -60,10 +65,10 @@ function renderLogin(){
   const demoMode = window.NA1_DEMO_MODE === true;
   const modeError = window.NA1_MODE_ERROR ? `<div class="mode-error" role="alert">${esc(window.NA1_MODE_ERROR)}</div>` : '';
   const accountList = `<div class="search-field login-search" style="margin:10px 0;">
-            ${ic('search')}<input id="loginSearch" placeholder="Search by name or role…" value="${esc(session._loginSearch||'')}" autocomplete="off">
+            ${ic('search')}<input id="loginSearch" type="search" placeholder="Search by name or role…" value="${esc(session._loginSearch||'')}" autocomplete="off" aria-label="Search demo accounts">
           </div>
           <div class="login-list" id="loginList">
-            ${groupsHTML || `<div class="empty-state" style="padding:26px 10px;">${ic('search')}<div>No accounts match “${esc(session._loginSearch||'')}”.</div></div>`}
+            ${loginListInnerHTML()}
           </div>`;
   return `
   <div class="login-screen">
@@ -133,6 +138,30 @@ async function doLogin(email, password){
   }
 }
 function attachLoginEvents(){
+  bindLoginCards();
+  const form = document.getElementById('loginForm');
+  if(form){
+    form.addEventListener('submit', (e)=>{
+      e.preventDefault();
+      if(session._loginBusy) return;
+      const email = (document.getElementById('loginEmail')||{}).value || '';
+      const password = (document.getElementById('loginPassword')||{}).value || '';
+      session._loginEmail = email;
+      doLogin(email.trim(), password);
+    });
+  }
+  // Searching refreshes only the account list — the search box is never re-created, so typing,
+  // pasting and editing work normally (and nothing typed into email/password is lost).
+  const s = document.getElementById('loginSearch');
+  if(s){
+    s.addEventListener('input', ()=>{
+      session._loginSearch = s.value;
+      const list = document.getElementById('loginList');
+      if(list){ list.innerHTML = loginListInnerHTML(); bindLoginCards(); }
+    });
+  }
+}
+function bindLoginCards(){
   document.querySelectorAll('.login-card').forEach(b=>{
     b.addEventListener('click', (e)=>{
       // Quick-fill only — pre-fills the email + shared demo password so exploring the
@@ -155,25 +184,15 @@ function attachLoginEvents(){
       if(emailEl) emailEl.focus();
     });
   });
-  const form = document.getElementById('loginForm');
-  if(form){
-    form.addEventListener('submit', (e)=>{
-      e.preventDefault();
-      if(session._loginBusy) return;
-      const email = (document.getElementById('loginEmail')||{}).value || '';
-      const password = (document.getElementById('loginPassword')||{}).value || '';
-      session._loginEmail = email;
-      doLogin(email.trim(), password);
-    });
-  }
-  const s = document.getElementById('loginSearch');
-  if(s){
-    s.addEventListener('input', ()=>{ session._loginSearch = s.value; render(); });
-    if(session._loginSearchFocused){ s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
-    s.addEventListener('focus', ()=>{ session._loginSearchFocused = true; });
-    s.addEventListener('blur', ()=>{ session._loginSearchFocused = false; });
-  }
 }
+
+// Per-device DISPLAY preferences (e.g. Grid vs List view). Only small UI choices from a fixed
+// allow-list are stored here — never business data (units, owners, reports, contacts…), which
+// stays server-owned (see data.js / sync.js). If browser storage is unavailable the choice simply
+// isn't remembered.
+const UI_PREF_KEYS = { unitView: 'na1_unit_view' };
+function uiPrefGet(name){ const k = UI_PREF_KEYS[name]; if(!k) return null; try { return localStorage.getItem(k); } catch(e){ return null; } }
+function uiPrefSet(name, value){ const k = UI_PREF_KEYS[name]; if(!k) return; try { localStorage.setItem(k, String(value)); } catch(e){ /* not remembered */ } }
 
 // Header-band helpers (presentation only). The search box hands its text to the News Feed's
 // existing search (session.invSearch) and opens that page — no new data or permissions involved.
@@ -198,7 +217,7 @@ function renderShell(u){
   <div class="sidebar">
     <div class="brand">
       <div class="brand-mark">N</div>
-      <div><div class="brand-name">New Avenue 1</div><div class="brand-sub">Internal Sales Platform</div></div>
+      <div><div class="brand-name">New Avenue</div><div class="brand-sub">Internal Sales Platform</div></div>
     </div>
     ${(!u.team) ? `<div style="padding:0 6px 14px 6px;"><div class="sidebar-env-label">Viewing environment</div>
       <div class="env-switch">
@@ -269,7 +288,7 @@ function renderMoreDrawer(u){
   return `<div class="drawer-backdrop" id="moreDrawerBackdrop">
     <div class="drawer-sheet">
       <div class="drawer-handle"></div>
-      <div style="font-weight:800; font-size:14px; padding:0 4px 10px;">More</div>
+      <div class="drawer-brand"><span class="brand-mark">N</span><div><div class="drawer-brand-name">New Avenue</div><div class="drawer-brand-sub">More</div></div></div>
       ${moreItems.map(it=>{
         const badge = it.badge?it.badge():0;
         return `<button class="nav-item drawer-item ${session.page===it.key?'active':''}" data-nav="${it.key}" data-closemore="1">${ic(it.icon)}<span>${it.label}</span>${badge>0?`<span class="nav-badge">${badge>9?'9+':badge}</span>`:''}</button>`;

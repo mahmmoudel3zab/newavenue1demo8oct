@@ -1,5 +1,5 @@
 /**
- * "Production build" for New Avenue 1.
+ * "Production build" for New Avenue.
  *
  * This app is a static HTML/CSS/JS site with no framework and no build tooling
  * (no bundler, no transpiler) — the source files ARE the production files.

@@ -1,5 +1,5 @@
 /* =========================================================
-   New Avenue 1 — "Lumen × Clarity" theme
+   New Avenue — "Lumen × Clarity" theme
    A dark, premium frame (sidebar, header band, mobile tab bar) around a bright, calm workspace.
    Display type: Bodoni Moda (titles, key numbers). Body: Manrope. Accent: champagne gold.
    Only presentation lives here — no behaviour depends on this file.
@@ -289,6 +289,7 @@ tr:last-child td{border-bottom:none;}
     transition:color .12s;
   }
   .mtab span{max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .mtab .mtab-icon-wrap, .mtab .nav-badge{overflow:visible; max-width:none;}   /* the label rule above must not clip the icon's badge */
   .mtab svg{width:21px;height:21px; flex-shrink:0;}
   .mtab-icon-wrap{position:relative; display:flex; align-items:center; justify-content:center; width:40px; height:26px; border-radius:13px; transition:background .12s, color .12s;}
   .mtab.active{color:var(--gold);}
@@ -375,7 +376,7 @@ tr:last-child td{border-bottom:none;}
    ========================================================= */
 .dash-grid{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr); gap:18px; align-items:start;}
 .dash-col{display:flex; flex-direction:column; gap:18px; min-width:0;}
-.dash-kpis{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:18px;}
+.dash-kpis{display:grid; grid-template-columns:repeat(var(--tiles,4),minmax(0,1fr)); gap:14px; margin-bottom:12px;}
 .dash-kpi{padding:16px 18px;}
 .dash-kpi b{display:block; font-family:var(--font-head); font-weight:400; font-size:34px; line-height:1.05; font-variant-numeric:lining-nums;}
 .dash-kpi span{font-size:12px; font-weight:600; color:var(--text-muted);}
@@ -540,3 +541,77 @@ tr:last-child td{border-bottom:none;}
 .mode-error{background:var(--warning-tint); color:var(--warning); border:1px solid var(--warning); border-radius:12px;
   padding:10px 12px; font-size:12.5px; font-weight:700; line-height:1.45; margin-bottom:14px;}
 @media (max-width:880px){ .demo-badge{padding:9px 10px;} .demo-badge .db-label{display:none;} }
+
+/* =========================================================
+   GRID / LIST VIEW — News Feed and My Units
+   ========================================================= */
+.results-bar{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap;}
+.results-bar > .section-sub{margin-bottom:0;}
+.view-switch{display:inline-flex; gap:3px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:3px; box-shadow:var(--shadow-card); flex-shrink:0;}
+.view-switch button{display:inline-flex; align-items:center; gap:6px; border:none; background:none; border-radius:9px; padding:7px 12px; font-size:12.5px; font-weight:700; color:var(--text-muted); transition:background .12s, color .12s;}
+.view-switch button svg{width:16px; height:16px;}
+.view-switch button:hover{color:var(--text);}
+.view-switch button.on{background:var(--brand); color:var(--bg);}
+.view-switch button.on svg{color:var(--gold);}
+.unit-list{display:flex; flex-direction:column; gap:10px;}
+.unit-row{display:flex; align-items:center; gap:18px; padding:10px 20px 10px 10px;}
+.unit-row .ur-photo{flex:0 0 150px; width:150px; height:100px; aspect-ratio:auto; border-radius:11px; font-size:10.5px;}
+.unit-row .ur-main{flex:1; min-width:0;}
+.unit-row .uc-title{font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.unit-row .uc-subline{margin:2px 0 8px;}
+.unit-row .uc-specs{margin-bottom:0;}
+.unit-row .ur-price{text-align:right; flex-shrink:0; min-width:170px;}
+.unit-row .ur-total{font-weight:800; font-size:17px; letter-spacing:-.01em; margin-top:2px; white-space:nowrap;}
+.unit-row .ur-dp{font-size:11.5px; color:var(--text-muted); font-weight:600; margin-top:3px; white-space:nowrap;}
+.unit-row-wrap{display:flex; align-items:stretch; gap:10px;}
+.unit-row-wrap > .unit-row{flex:1; min-width:0;}
+.ur-actions{display:flex; flex-direction:column; gap:8px; justify-content:center;}
+.ur-actions .btn{justify-content:center;}
+@media (max-width:880px){
+  .view-switch button{padding:8px 10px;}
+  .view-switch button span{display:none;}
+  .unit-row{display:grid; grid-template-columns:96px minmax(0,1fr); grid-template-areas:"photo main" "photo price"; gap:4px 12px; padding:8px 12px 8px 8px; align-items:start;}
+  .unit-row .ur-photo{grid-area:photo; width:96px; height:96px; flex:none; align-self:center;}
+  .unit-row .ur-main{grid-area:main;}
+  .unit-row .ur-price{grid-area:price; text-align:left; min-width:0;}
+  .unit-row .uc-title{font-size:17px;}
+  .unit-row .uc-subline{font-size:11.5px; margin:1px 0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .unit-row .uc-specs{gap:10px; font-size:11.5px;}
+  .unit-row .uc-pricelabel{display:none;}
+  .unit-row .ur-total{font-size:15px; margin-top:0;}
+  .unit-row .ur-dp{font-size:11px; white-space:normal;}
+  .unit-row-wrap{flex-direction:column; gap:6px;}
+  .ur-actions{flex-direction:row;}
+  .ur-actions .btn{flex:1;}
+}
+
+/* =========================================================
+   DASHBOARD — shortcut tiles + quick actions
+   ========================================================= */
+.dash-link{display:flex; flex-direction:column; align-items:stretch; gap:2px; text-align:left; cursor:pointer; color:var(--text); font:inherit; transition:box-shadow .15s, border-color .15s, transform .08s;}
+.dash-link:hover{border-color:var(--gold); box-shadow:0 2px 4px rgba(23,25,28,.06), 0 14px 32px rgba(23,25,28,.09);}
+.dash-link:active{transform:scale(.99);}
+.dash-link .dk-top{display:flex; align-items:flex-start; justify-content:space-between;}
+.dash-link .dk-top svg{width:16px; height:16px; color:var(--text-faint); margin-top:6px;}
+.dash-link:hover .dk-top svg{color:var(--gold);}
+.dash-link .dk-label{font-size:13px; font-weight:700; color:var(--text); margin-top:2px;}
+.dash-link .dk-sub{font-size:11.5px; font-weight:600; color:var(--text-muted);}
+.dash-link .dk-sub.good{color:var(--success);}
+.dash-link .dk-sub.warn{color:var(--warning);}
+.dash-link .dk-sub.bad{color:var(--danger);}
+.quick-actions{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;}
+.qa-btn{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:999px; padding:8px 14px; font-size:12.5px; font-weight:700; box-shadow:var(--shadow-card); transition:border-color .12s;}
+.qa-btn svg{width:15px; height:15px; color:var(--brand-dark);}
+.qa-btn:hover{border-color:var(--gold);}
+@media (max-width:880px){
+  .dash-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .dash-link .dk-label{font-size:12.5px;}
+  .quick-actions{flex-wrap:nowrap; overflow-x:auto; margin:0 -14px 16px; padding:2px 14px 4px; scrollbar-width:none;}
+  .quick-actions::-webkit-scrollbar{display:none;}
+  .qa-btn{flex-shrink:0;}
+}
+/* Mobile "More" drawer brand header */
+.drawer-brand{display:flex; align-items:center; gap:10px; padding:0 4px 12px;}
+.drawer-brand .brand-mark{width:32px; height:32px; font-size:17px;}
+.drawer-brand-name{font-weight:800; font-size:14.5px; line-height:1.1;}
+.drawer-brand-sub{font-size:11px; color:var(--text-faint); font-weight:600;}
