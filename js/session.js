@@ -108,10 +108,14 @@ function visibleOwnerUnits(u){
   if(isMgmt(u)){ const down = getDownlineIds(DB.users, u.id); return pool.filter(r=>down.includes(r.salespersonId)); }
   return pool; // admins / top execs see all in active team view
 }
-// Returns distinct Owner records visible to this user (derived from visible relationships).
+// Owner records shown on the Owners page to roles that do NOT hold owners themselves (admins, top execs):
+// every non-deleted owner of the active team, exactly as the server returned them (GET /owners already limits
+// the list to that team). Previously this was derived from ACTIVE UNIT RELATIONSHIPS, so an owner who had
+// been created but had no unit linked yet (a normal state - "Owners exist independently of Units") was
+// invisible to admins even though the server returned it.
 function visibleOwners(u){
-  const relIds = new Set(visibleOwnerUnits(u).filter(r=>r.status==='active').map(r=>r.ownerId));
-  return DB.owners.filter(o=>relIds.has(o.id) && !o.deletedAt);
+  const tk = myTeamKey(u);
+  return DB.owners.filter(o=>!o.deletedAt && o.team===tk);
 }
 // My Owners: the owners THIS user personally created/holds (home, shared-by-approval, or has
 // an active unit relationship for) — unlimited units per owner, zero units allowed.

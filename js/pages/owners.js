@@ -45,6 +45,7 @@ function renderOwnersPage(u){
     </div>
     ${salesActive && scope==='my' ? `<button class="btn btn-primary btn-sm" id="addOwnerBtn" ${atCap?'disabled title="Remove an owner first — active owner limit reached"':''}>${ic('plus')} Add owner</button>` : ''}
   </div>
+  ${!salesActive ? `<div id="ownersAdminNote" class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-soft,inherit);">Owners are created by sales users (salespeople and managers) from their own <b>Owners → Add owner</b> page, because every owner belongs to one salesperson and counts toward that person's owner limit. From here you can view every owner of this team and edit them; use <b>Admin</b> → Owner Transfers / Transfer Owner / Available Pool to move or restore owners. To test, add a sales user under <b>Admin → Users → Add sales user</b> and sign in as them.</div>` : ''}
   ${atCap?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12.5px; color:var(--warning);">You're at the ${cap} active owner limit. Remove an existing owner (end all of their relationships) before adding a new one.</div>`:''}
   <div class="card" style="margin-bottom:18px;">
     ${list.length? list.map(o=>ownerCard(o,u,scope)).join('') : emptyRow(scope==='my' ? 'No owners yet — click "Add owner" to create your first one.' : 'No team owners yet.')}
