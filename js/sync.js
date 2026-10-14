@@ -300,6 +300,10 @@ async function postRequestOnServer(u, team, text) {
   await NA1_API.post('/requests', { text, team });
   await hydrateRequestsFromServer(u, team);
 }
+async function postReplyOnServer(u, team, requestId, text) {
+  await NA1_API.post('/requests/' + encodeURIComponent(requestId) + '/replies', { text, team });
+  await hydrateRequestsFromServer(u, team);
+}
 // Moves this user's personal read position (server-side, forward only) and adopts the server's answer.
 let _reqReadInFlight = null;
 async function markRequestsReadOnServer(u, team) {
@@ -330,7 +334,8 @@ function startRequestsPolling() {
     const ok2 = await hydrateNotificationsFromServer(u);
     if (!ok1 && !ok2) return;
     const input = document.getElementById('reqInput');
-    if (before !== sig() && !(session.page === 'requests' && input && input.value)) render();
+    const rin = document.querySelector('[data-replyinput]');
+    if (before !== sig() && !(session.page === 'requests' && ((input && input.value) || (rin && rin.value)))) render();
   }, 60000);
 }
 function stopRequestsPolling() { if (_reqPollTimer) { clearInterval(_reqPollTimer); _reqPollTimer = null; } }
@@ -359,7 +364,7 @@ async function restoreSessionOnLoad() {
 function mapServerUserToLocal(x) {
   return { id: x.id, name: x.name, email: x.email || null, role: x.role, team: x.team || null,
     managerId: x.managerId || null, avatar: x.avatarColor || avatarColor(x.name),
-    jobTitle: x.jobTitle || null, titleNeedsReview: !!x.titleNeedsReview };
+    jobTitle: x.jobTitle || null, titleNeedsReview: !!x.titleNeedsReview, active: x.active !== false };
 }
 async function hydrateUsersFromServer() {
   try {
@@ -387,6 +392,12 @@ async function createUserOnServer(payload) {
 }
 async function updateUserOnServer(id, payload) {
   const r = await NA1_API.patch('/admin/users/' + encodeURIComponent(id), payload);
+  await hydrateUsersFromServer();
+  await hydrateReferenceFromServer(currentUser());
+  return r;
+}
+async function setUserActiveOnServer(id, active) {
+  const r = active ? await NA1_API.post('/admin/users/' + encodeURIComponent(id) + '/reactivate', {}) : await NA1_API.post('/admin/users/' + encodeURIComponent(id) + '/deactivate', {});
   await hydrateUsersFromServer();
   await hydrateReferenceFromServer(currentUser());
   return r;

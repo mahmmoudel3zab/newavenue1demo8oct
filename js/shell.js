@@ -102,7 +102,7 @@ function renderLogin(){
           <div class="login-foot" style="margin-top:4px;">Demo accounts — click an account to sign in instantly</div>
           ${accountList}
 ` : `
-          <h2>Sign in</h2>
+          ${session._loginActivate ? activationFormHTML(err) : `<h2>Sign in</h2>
           <p class="login-formpane-sub">Enter your email and password to continue.</p>
           <form id="loginForm" autocomplete="on">
             <div class="search-field login-search" style="margin-bottom:10px;">
@@ -114,6 +114,7 @@ function renderLogin(){
             ${err ? `<div class="login-error" style="color:#B0463F; font-size:12.5px; font-weight:700; margin-top:10px;">${esc(err)}</div>` : ''}
             <button type="submit" id="loginSubmit" class="btn btn-primary" style="width:100%; margin-top:14px;">${session._loginBusy ? 'Signing in…' : 'Sign in'}</button>
           </form>
+          <div style="margin-top:12px; font-size:12.5px;"><a href="#" id="showActivateLink">First time here? Activate your account</a></div>`}
           ${showDemoAccounts ? `          <div class="login-foot" style="margin-top:18px;">Demo accounts — click to fill, password still required to sign in</div>
           ${accountList}
 ` : ''}`}
@@ -123,12 +124,78 @@ function renderLogin(){
     </div>
   </div>`;
 }
+function activationFormHTML(err){
+  return `<h2>Activate your account</h2>
+          <p class="login-formpane-sub">Enter your work email, the activation code you received from your administrator, and choose your own password.</p>
+          <form id="activateForm" autocomplete="off">
+            <div class="search-field login-search" style="margin-bottom:10px;"><input id="actEmail" type="email" placeholder="Work email" value="${esc(session._loginEmail||'')}" autocomplete="username" required></div>
+            <div class="search-field login-search" style="margin-bottom:10px;"><input id="actCode" type="text" placeholder="Activation code (XXXX-XXXX-XXXX)" autocomplete="off" autocapitalize="characters" spellcheck="false" required></div>
+            <div class="search-field login-search" style="margin-bottom:10px;"><input id="actPw" type="password" placeholder="New password (8–128 characters)" autocomplete="new-password" required></div>
+            <div class="search-field login-search"><input id="actPw2" type="password" placeholder="Repeat new password" autocomplete="new-password" required></div>
+            ${err ? `<div class="login-error" style="color:#B0463F; font-size:12.5px; font-weight:700; margin-top:10px;">${esc(err)}</div>` : ''}
+            <button type="submit" id="activateSubmit" class="btn btn-primary" style="width:100%; margin-top:14px;">${session._loginBusy ? 'Activating…' : 'Activate and sign in'}</button>
+          </form>
+          <div style="margin-top:12px; font-size:12.5px;"><a href="#" id="backToSignIn">Back to sign in</a></div>`;
+}
+async function doActivate(email, code, pw){
+  session._loginError = null; session._loginBusy = true; render();
+  try {
+    const backendUser = await NA1_API.activate(email, code, pw);
+    session._loginActivate = false;
+    await setAuthenticatedUser(backendUser);
+    session._loginBusy = false;
+  } catch(e){
+    session._loginBusy = false;
+    session._loginError = (e && e.message) ? e.message : 'Activation failed. Please try again.';
+    render();
+  }
+}
+// Blocking "set your own password" screen. Cannot be dismissed. Resolves once the server accepted the new password
+// (the API client then holds the fresh token). reloadAfter: used when the requirement is discovered mid-session.
+function showForcedPasswordChange(opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    if(document.getElementById('forcePwBackdrop')) return;
+    const needCur = !opts.currentPassword;
+    openModal(`
+    <div class="modal-head"><div style="font-weight:800;">Set your own password</div></div>
+    <div class="modal-body" id="forcePwBody">
+      <div class="card card-pad" style="margin-bottom:14px; font-size:12.5px;">You signed in with a temporary credential. For your security you must choose your own password before you can continue.</div>
+      ${needCur ? `<div class="field"><label class="field-label">Temporary password</label><input id="fp_cur" type="password" autocomplete="current-password"></div>` : ''}
+      <div class="field"><label class="field-label">New password (8–128 characters)</label><input id="fp_new" type="password" autocomplete="new-password"></div>
+      <div class="field"><label class="field-label">Repeat new password</label><input id="fp_rep" type="password" autocomplete="new-password"></div>
+      <div id="fp_err" style="color:#B0463F; font-size:12.5px; font-weight:700; min-height:18px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="fp_logout" style="margin-right:auto;">Sign out</button><button class="btn btn-primary" id="fp_save">Save new password</button></div>`, { noBackdropClose: true });
+    const bd = document.getElementById('modalBackdrop'); if(bd) bd.id = 'modalBackdrop';
+    const marker = document.createElement('i'); marker.id = 'forcePwBackdrop'; marker.style.display = 'none'; document.body.appendChild(marker);
+    const cleanup = ()=>{ marker.remove(); closeModal(); };
+    document.getElementById('fp_logout').addEventListener('click', ()=>{ cleanup(); if(typeof logout==='function') logout(); });
+    document.getElementById('fp_save').addEventListener('click', async ()=>{
+      const cur = needCur ? document.getElementById('fp_cur').value : opts.currentPassword;
+      const nw = document.getElementById('fp_new').value, rep = document.getElementById('fp_rep').value;
+      const errEl = document.getElementById('fp_err');
+      if(!cur){ errEl.textContent = 'Enter your temporary password'; return; }
+      if(nw.length < 8 || nw.length > 128){ errEl.textContent = 'New password must be 8–128 characters'; return; }
+      if(nw !== rep){ errEl.textContent = 'The new passwords do not match'; return; }
+      if(nw === cur){ errEl.textContent = 'Choose a password different from the temporary one'; return; }
+      const btn = document.getElementById('fp_save'); btn.disabled = true;
+      try {
+        await NA1_API.changePassword(cur, nw);
+        cleanup(); toast('Password set');
+        if(opts.reloadAfter) location.reload(); else resolve(true);
+      } catch(e){ btn.disabled = false; errEl.textContent = (e && e.isNetworkError) ? 'Could not reach the server — password NOT changed.' : ((e && e.message) || 'Password change failed'); }
+    });
+  });
+}
 async function doLogin(email, password){
   session._loginError = null;
   session._loginBusy = true;
   render();
   try {
     const backendUser = await NA1_API.login(email, password);
+    // Temporary password (new/imported/reset account): it must be replaced BEFORE anything else loads.
+    if(backendUser.mustChangePassword) await showForcedPasswordChange({ currentPassword: password });
     await setAuthenticatedUser(backendUser);
     session._loginBusy = false;
   } catch(e){
@@ -139,6 +206,18 @@ async function doLogin(email, password){
 }
 function attachLoginEvents(){
   bindLoginCards();
+  const al = document.getElementById('showActivateLink'); if(al) al.addEventListener('click', (e)=>{ e.preventDefault(); session._loginActivate = true; session._loginError = null; render(); });
+  const bk = document.getElementById('backToSignIn'); if(bk) bk.addEventListener('click', (e)=>{ e.preventDefault(); session._loginActivate = false; session._loginError = null; render(); });
+  const af = document.getElementById('activateForm');
+  if(af) af.addEventListener('submit', (e)=>{
+    e.preventDefault(); if(session._loginBusy) return;
+    const em = document.getElementById('actEmail').value.trim(), code = document.getElementById('actCode').value.trim();
+    const p1 = document.getElementById('actPw').value, p2 = document.getElementById('actPw2').value;
+    session._loginEmail = em;
+    if(p1.length < 8 || p1.length > 128){ session._loginError = 'New password must be 8–128 characters'; render(); return; }
+    if(p1 !== p2){ session._loginError = 'The two passwords do not match'; render(); return; }
+    doActivate(em, code, p1);
+  });
   const form = document.getElementById('loginForm');
   if(form){
     form.addEventListener('submit', (e)=>{

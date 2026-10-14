@@ -225,6 +225,14 @@
       (s.requests[team] = s.requests[team] || []).push(r); s.readPos[u.id + '|' + team] = r.id; save();
       return { id: r.id };
     }
+    if (method === 'POST' && (m = path.match(/^\/requests\/([^/]+)\/replies$/))) {
+      var rtext = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!rtext) throw fail(400, 'text is required');
+      var rteam = scopeTeam(u, body), parentReq = (s.requests[rteam] || []).find(function (x) { return x.id === m[1]; });
+      if (!parentReq) throw fail(404, 'Request not found');
+      parentReq.replies = parentReq.replies || []; parentReq.replies.push({ id: uid('rr'), authorId: u.id, text: rtext.slice(0, 2000), at: Date.now() }); save();
+      return { id: parentReq.id };
+    }
     if (method === 'PUT' && path === '/requests/read-position') {
       var tm = scopeTeam(u, body); s.readPos[u.id + '|' + tm] = body.requestId; save();
       var st = requestsOut(u, tm); return { lastReadRequestId: st.lastReadRequestId, unreadCount: st.unreadCount };

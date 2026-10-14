@@ -61,6 +61,7 @@
   // Called whenever a request comes back 401 (expired/invalid token). Pages can override this
   // via NA1_API.onUnauthorized = fn to redirect to the login screen / clear local session state.
   let onUnauthorized = null;
+  let onPasswordChangeRequired = null;
 
   async function request(method, path, { body, query } = {}){
     let url = BASE + path;
@@ -98,7 +99,9 @@
     }
 
     if(!res.ok){
-      if(res.status === 401 && typeof onUnauthorized === 'function') onUnauthorized();
+      if(res.status === 401 && typeof onUnauthorized === 'function') onUnauthorized(data);
+      // The server refuses everything except "change password" until a temporary password has been replaced.
+      if(res.status === 403 && data && data.code === 'PASSWORD_CHANGE_REQUIRED' && typeof onPasswordChangeRequired === 'function') onPasswordChangeRequired();
       throw new ApiError(res.status, data);
     }
     return data;
@@ -127,9 +130,17 @@
     getToken, getAuthUser,
     isLoggedIn: () => !!getToken(),
     set onUnauthorized(fn){ onUnauthorized = fn; },
+    set onPasswordChangeRequired(fn){ onPasswordChangeRequired = fn; },
 
     async login(email, password){
       const data = await request('POST', '/auth/login', { body: { email, password } });
+      setToken(data.token);
+      setAuthUser(data.user);
+      return data.user;
+    },
+    // First sign-in of a bulk-imported account: single-use activation code + the password the person chooses.
+    async activate(email, code, newPassword){
+      const data = await request('POST', '/auth/activate', { body: { email, code, newPassword } });
       setToken(data.token);
       setAuthUser(data.user);
       return data.user;

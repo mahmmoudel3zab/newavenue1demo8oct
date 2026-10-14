@@ -637,7 +637,7 @@ function setUserJobTitle(actor, target, newTitle){
 // manager). Used to populate the "Reports to" selector sensibly rather than just excluding self.
 function possibleManagersFor(userId){
   const down = new Set(getDownlineIds(DB.users, userId));
-  return DB.users.filter(x=> x.id!==userId && !down.has(x.id));
+  return DB.users.filter(x=> x.id!==userId && !down.has(x.id) && x.active!==false);
 }
 
 function buildDemoData(){

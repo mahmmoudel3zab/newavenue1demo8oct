@@ -42,6 +42,11 @@ function requestBubble(r){
             <div style="font-size:12.5px; background:var(--surface-2); display:inline-block; padding:6px 10px; border-radius:8px; margin-top:2px;">${esc(rp.text)}</div></div>
           </div>`;
         }).join('')}
+        <div style="margin:6px 0 0 14px;">
+          ${session._replyOpen===r.id
+            ? `<div style="display:flex; gap:6px; align-items:center;"><input class="reply-input" data-replyinput="${esc(r.id)}" placeholder="Write a reply…" maxlength="2000" style="flex:1; min-width:0;"><button class="btn btn-sm btn-primary" data-replysend="${esc(r.id)}">Reply</button><button class="btn btn-sm" data-replycancel="1" aria-label="Cancel reply">✕</button></div>`
+            : `<button class="btn btn-sm" data-replyopen="${esc(r.id)}" style="padding:2px 10px; font-size:11.5px;">${r.replies.length?`Reply · ${r.replies.length} repl${r.replies.length===1?'y':'ies'}`:'Reply'}</button>`}
+        </div>
       </div>
     </div>
   </div>`;
@@ -61,9 +66,23 @@ AFTER_RENDER.requests = function(u){
       const l2 = requestsFor(tk);
       const after = (l2[l2.length-1]||{}).id + ':' + l2.length + ':' + DB.requestUnread[tk];
       const input = document.getElementById('reqInput');
-      if(ok && before!==after && session.page==='requests' && !(input && input.value)) render();
+      const rin = document.querySelector('[data-replyinput]');
+      if(ok && before!==after && session.page==='requests' && !(input && input.value) && !(rin && rin.value)) render();
     });
   }
+  // ---- replies (inline, per request) ----
+  document.querySelectorAll('[data-replyopen]').forEach(b=> b.addEventListener('click', ()=>{ session._replyOpen = b.dataset.replyopen; const keep = scroll ? scroll.scrollTop : 0; render(); const sc = document.getElementById('reqScroll'); if(sc) sc.scrollTop = keep; const inp = document.querySelector('[data-replyinput]'); if(inp) inp.focus(); }));
+  document.querySelectorAll('[data-replycancel]').forEach(b=> b.addEventListener('click', ()=>{ session._replyOpen = null; const keep = scroll ? scroll.scrollTop : 0; render(); const sc = document.getElementById('reqScroll'); if(sc) sc.scrollTop = keep; }));
+  const sendReply = async (reqId)=>{
+    const inp = document.querySelector(`[data-replyinput="${CSS.escape(reqId)}"]`); const btn = document.querySelector(`[data-replysend="${CSS.escape(reqId)}"]`);
+    const txt = inp ? inp.value.trim() : ''; if(!txt || (btn && btn.disabled)) return;
+    if(btn) btn.disabled = true;
+    try{ await postReplyOnServer(u, tk, reqId, txt); }
+    catch(e){ if(btn) btn.disabled = false; toast(e && e.isNetworkError ? 'Could not reach the server — your reply was NOT sent.' : ((e && e.message) || 'Could not send the reply')); return; }
+    session._replyOpen = null; render(); toast('Reply sent');
+  };
+  document.querySelectorAll('[data-replysend]').forEach(b=> b.addEventListener('click', ()=> sendReply(b.dataset.replysend)));
+  document.querySelectorAll('[data-replyinput]').forEach(i=> i.addEventListener('keydown', e=>{ if(e.key==='Enter') sendReply(i.dataset.replyinput); }));
   const jump = document.getElementById('jumpUnreadBtn');
   if(jump) jump.addEventListener('click', ()=>{
     const div = document.getElementById('unreadDivider'); if(div) div.scrollIntoView({behavior:'smooth', block:'center'});

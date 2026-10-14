@@ -1,6 +1,7 @@
 /* =========================================================
    ADMIN
    ========================================================= */
+function importsAvailable(){ return window.NA1_APP_MODE !== 'demo'; }
 function renderAdminPage(u){
   if(!isAdmin(u)) return `<div class="empty-state">${ic('admin')}<div>Access denied — administrative permissions required.</div></div>`;
   const isHeadAdmin = u.role==='headadmin';
@@ -12,12 +13,16 @@ function renderAdminPage(u){
   // (e.g. a stale tab from switching accounts), fall back to Users rather than show it.
   if(HEAD_ADMIN_ONLY_TABS.includes(tab) && !isHeadAdmin) tab = 'users';
   const tabs = [['users','Users'],['units','Pending Units'],['transfers','Owner Transfers'],['audit','Audit Log']];
+  if(canManageUsers(u) && importsAvailable()) tabs.push(['imports','Data Import']);
+  if(importsAvailable()) tabs.push(['settings','Settings']);
   if(isHeadAdmin) tabs.push(['ownertransfer','Transfer Owner'],['pool','Available Pool'],['deletedowners','Deleted Owners'],['deletedunits','Deleted Units']);
   let body = '';
   if(tab==='users') body = renderAdminUsers(u);
   else if(tab==='units') body = renderAdminUnits(u);
   else if(tab==='transfers') body = renderAdminTransfers(u);
   else if(tab==='audit') body = renderAdminAudit(u);
+  else if(tab==='imports') body = renderAdminImports(u);
+  else if(tab==='settings') body = renderAdminSettings(u);
   else if(tab==='ownertransfer') body = renderAdminOwnerTransfer(u);
   else if(tab==='pool') body = renderAdminAvailablePool(u);
   else if(tab==='deletedowners') body = renderAdminDeletedOwners(u);
@@ -54,6 +59,7 @@ function renderAdminUsers(u){
       ${ic('search')}<input id="adminUserSearch" type="search" placeholder="Search by name or reference code…" value="${esc(session._adminUserSearch||'')}" autocomplete="off" aria-label="Search users">
     </div>
     <select id="adminRoleFilter" style="width:auto;">${ADMIN_ROLE_FILTER_GROUPS.map(([v,l])=>`<option value="${v}" ${roleFilter===v?'selected':''}>${l}</option>`).join('')}</select>
+    ${canManage && importsAvailable()?`<button class="btn btn-sm" id="importUsersBtn">${ic('plus')} Import users (CSV)</button>`:''}
     ${canManage?`<button class="btn btn-primary btn-sm" id="addSalesUserBtn">${ic('plus')} Add sales user</button>`:''}
   </div>
   ${!canManage?`<div class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-faint);">You have read-only access to the directory. Role, department, job title and hierarchy changes require Senior Admin or Head Admin.</div>`:''}
@@ -61,6 +67,7 @@ function renderAdminUsers(u){
     <div style="flex:1 1 260px; font-size:12.5px; color:var(--warning);"><b>${reviewCount}</b> account${reviewCount===1?'':'s'} ${reviewCount===1?'has':'have'} a default job title (Junior/Senior Sales) that a Senior or Head Admin should confirm or correct — these were not arbitrarily assigned as final.</div>
     <button class="btn btn-sm ${reviewOnly?'btn-primary':''}" id="toggleReviewOnlyBtn">${reviewOnly?'Showing review-only — show all':'Show accounts needing review'}</button>
   </div>` : ''}
+  ${DB.users.some(x=>x.active===false) ? `<label style="display:flex; gap:8px; align-items:center; font-size:12.5px; margin-bottom:10px;"><input type="checkbox" id="showInactiveChk" style="width:auto; flex:none;" ${session._adminShowInactive?'checked':''}> Show deactivated users (${DB.users.filter(x=>x.active===false).length})</label>` : ''}
   <div class="card" style="overflow-x:auto;" id="adminUsersTable">${adminUsersTableHTML(u)}</div>`;
 }
 // The users table on its own — refreshed by itself while searching so the search box keeps focus.
@@ -72,6 +79,7 @@ function adminUsersTableHTML(u){
   let list = DB.users.slice();
   if(roleFilter) list = list.filter(x=>x.role===roleFilter);
   if(reviewOnly) list = list.filter(x=>x.titleNeedsReview);
+  if(!session._adminShowInactive) list = list.filter(x=>x.active!==false);
   if(q){
     list = list.filter(x=>{
       const ref = DB.refs.find(r=>r.userId===x.id);
@@ -84,7 +92,7 @@ function adminUsersTableHTML(u){
     const mgr = DB.users.find(m=>m.id===x.managerId);
     const ref = DB.refs.find(r=>r.userId===x.id);
     return `<tr>
-      <td style="font-weight:700;">${esc(x.name)}${x.id===u.id?' <span class="badge badge-muted">You</span>':''}</td>
+      <td style="font-weight:700;">${esc(x.name)}${x.id===u.id?' <span class="badge badge-muted">You</span>':''}${x.active===false?' <span class="badge badge-muted" title="Deactivated — cannot sign in; history is kept">Inactive</span>':''}</td>
       <td>${esc(ROLE_LABELS[x.role])}</td>
       <td>${esc(displayTitle(x))}${x.titleNeedsReview?' <span class="badge badge-pending" title="Default title — needs Senior/Head Admin confirmation">Review</span>':''}</td>
       <td>${x.team?`<span class="team-pill ${x.team}">${x.team}</span>`:'—'}</td>
@@ -148,7 +156,7 @@ function openUserAdminModal(userId, u){
       <div class="field"><label class="field-label">WhatsApp number</label><input id="ua_wa" inputmode="numeric" value="${esc(ref?ref.whatsapp:'')}" placeholder="e.g. 01012345678" ${ref?'':'disabled'}></div>
     </div>
   </div>
-  <div class="modal-foot">${isSelf?'':'<button class="btn" id="resetPwBtn" style="margin-right:auto;">Reset password</button>'}<button class="btn btn-primary" id="saveUserAdminBtn">Save changes</button></div>`);
+  <div class="modal-foot">${isSelf?'':`<button class="btn" id="resetPwBtn" style="margin-right:auto;">Reset password</button><button class="btn ${target.active===false?'':'btn-danger'}" id="toggleActiveBtn">${target.active===false?'Reactivate':'Deactivate'}</button>`}<button class="btn btn-primary" id="saveUserAdminBtn">Save changes</button></div>`);
   document.getElementById('modalCloseX').addEventListener('click', closeModal);
   const rpb = document.getElementById('resetPwBtn');
   if(rpb) rpb.addEventListener('click', async ()=>{
@@ -158,6 +166,21 @@ function openUserAdminModal(userId, u){
       const r = await resetUserPasswordOnServer(target.id);
       showTempPasswordModal(target.name, r.temporaryPassword, u);
     }catch(e){ rpb.disabled = false; reportUserWriteError(e, 'The password reset'); }
+  });
+  const tab = document.getElementById('toggleActiveBtn');
+  if(tab) tab.addEventListener('click', async ()=>{
+    const wasInactive = target.active===false;
+    const msg = wasInactive
+      ? `Reactivate ${target.name}?\n\nA new temporary password will be issued and shown once; they must set their own password at sign-in.`
+      : `Deactivate ${target.name}?\n\nThey are signed out immediately and cannot sign in. Their reports, units, owners and activity history are kept and NOT reassigned.`;
+    if(!confirm(msg)) return;
+    tab.disabled = true;
+    try{
+      const r = await setUserActiveOnServer(target.id, wasInactive);
+      closeModal();
+      if(wasInactive && r && r.temporaryPassword) showTempPasswordModal(target.name, r.temporaryPassword, u);
+      else { toast(target.name+(wasInactive?' reactivated':' deactivated')); if(typeof render==='function') render(); }
+    }catch(e){ tab.disabled = false; reportUserWriteError(e, wasInactive?'Reactivation':'Deactivation'); }
   });
   ['ua_phone','ua_wa'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', (e)=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); }); });
   // Department AND reference-field applicability both follow the currently-SELECTED role+team
@@ -517,6 +540,8 @@ function openOwnerTransferModal(ownerId, u){
 }
 
 AFTER_RENDER.admin = function(u){
+  if((session._adminTab||'users')==='settings') bindAdminSettings(u);
+  if((session._adminTab||'users')==='imports'){ if(!session._importBatches && !session._importBatchesLoading){ session._importBatchesLoading = true; loadImportBatches(u).then(()=>{ session._importBatchesLoading = false; }); } bindAdminImports(u); }
   if((session._adminTab||'users')==='audit' && !session._auditLoading && Date.now()-(session._auditFetchedAt||0) > 15000){
     session._auditLoading = true; session._auditFetchedAt = Date.now();   // time gate: re-render below must not refetch in a loop
     hydrateAuditLogFromServer().then(ok=>{
@@ -535,7 +560,9 @@ AFTER_RENDER.admin = function(u){
     });
   }
   const rf = document.getElementById('adminRoleFilter'); if(rf) rf.addEventListener('change', ()=>{ session._adminRoleFilter = rf.value; renderPageInto(u); });
+  const sic = document.getElementById('showInactiveChk'); if(sic) sic.addEventListener('change', ()=>{ session._adminShowInactive = sic.checked; renderPageInto(u); });
   const trb = document.getElementById('toggleReviewOnlyBtn'); if(trb) trb.addEventListener('click', ()=>{ session._adminReviewOnly = !session._adminReviewOnly; renderPageInto(u); });
+  const iu = document.getElementById('importUsersBtn'); if(iu) iu.addEventListener('click', ()=> openImportUsersWizard(u, ()=> renderPageInto(u)));
   const au = document.getElementById('addSalesUserBtn'); if(au) au.addEventListener('click', ()=> openAddSalesUserModal(u));
   bindAdminUserRows(u);
   document.querySelectorAll('[data-approveunit]').forEach(b=> b.addEventListener('click', async ()=>{
@@ -608,3 +635,32 @@ function bindOwnerTransferRows(u){
   document.querySelectorAll('[data-starttransfer]').forEach(b=> b.addEventListener('click', ()=> openOwnerTransferModal(b.dataset.starttransfer, u)));
 }
 
+
+/* ---------- Settings (owner limit) ----------
+   Everyone with an admin role can SEE the limit; only Head Admin can change it (the server enforces this).
+   Lowering it never deletes owners or removes access to existing ones — people over the new limit simply cannot
+   add more until they are under it. The same server value feeds every "x / limit" label and Add-owner check. */
+function renderAdminSettings(u){
+  const cap = DB.ownerCap || 30, canEdit = u.role==='headadmin';
+  return `<div class="card card-pad" style="max-width:640px;">
+    <div style="font-weight:800; margin-bottom:4px;">Owner limit per salesperson</div>
+    <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">The maximum number of active owners one salesperson can hold. Default 30; allowed range 1–500. Changing it <b>never deletes owners</b> and never blocks access to existing ones — someone already above a lowered limit keeps everything they have and just cannot add new owners until they are under it.</div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input id="capInput" type="number" min="1" max="500" step="1" value="${cap}" ${canEdit?'':'disabled'} style="width:110px;" aria-label="Owner limit">
+      ${canEdit ? `<button class="btn btn-primary btn-sm" id="capSave">Save limit</button>` : `<span class="badge badge-muted">Only Head Admin can change this</span>`}
+    </div>
+    <div id="capMsg" style="font-size:12.5px; margin-top:10px; min-height:18px;"></div>
+  </div>`;
+}
+function bindAdminSettings(u){
+  const btn = document.getElementById('capSave'); if(!btn) return;
+  btn.addEventListener('click', async ()=>{
+    const msg = document.getElementById('capMsg'), v = Number(document.getElementById('capInput').value);
+    if(!Number.isInteger(v) || v<1 || v>500){ msg.style.color='#B0463F'; msg.textContent='Enter a whole number from 1 to 500.'; return; }
+    if(v < (DB.ownerCap||30) && !confirm(`Lower the limit to ${v}? Nobody loses any owner, but salespeople who already hold more than ${v} cannot add new owners until they are under it.`)) return;
+    btn.disabled = true;
+    try{ const r = await NA1_API.patch('/admin/settings/owner-cap', { value: v }); DB.ownerCap = r.owner_cap; msg.style.color='var(--success)'; msg.textContent = `Saved — the limit is now ${r.owner_cap}.`; toast('Owner limit updated'); }
+    catch(e){ msg.style.color='#B0463F'; msg.textContent = (e && e.isNetworkError) ? 'Could not reach the server — the limit was NOT changed.' : ((e && e.message) || 'Could not save'); }
+    btn.disabled = false;
+  });
+}

@@ -83,7 +83,7 @@ function renderDashboard(u){
       if(st==='completed') done++; else if(st==='in_progress') prog++; else if(st==='missing') miss++;
       const stBadge = st==='completed' ? '<span class="badge badge-success">Completed</span>' : st==='in_progress' ? '<span class="badge badge-pending">In progress</span>' : st==='missing' ? '<span class="badge badge-fresh">Missing</span>' : '<span class="badge badge-muted">—</span>';
       return `<div class="list-row"><span class="avatar" style="background:${su.avatar}; width:34px; height:34px; font-size:11.5px;">${initials(su.name)}</span>
-        <div class="lr-t"><b>${esc(su.name)}</b><small>${esc(displayTitle(su))} · ${sun} units · ${so}/30 owners</small></div>${stBadge}</div>`;
+        <div class="lr-t"><b>${esc(su.name)}</b><small>${esc(displayTitle(su))} · ${sun} units · ${so}/${DB.ownerCap||30} owners</small></div>${stBadge}</div>`;
     }).join('');
     const tot = Math.max(1, done+prog+miss);
     teamCard = `<div class="card">

@@ -44,8 +44,9 @@ function renderOwnersPage(u){
       ${salesActive && scope==='my' ? `${ownerCount} / ${cap} active owners` : `${list.length} owner${list.length===1?'':'s'}${scope==='team'?' across your team':''}`}
     </div>
     ${salesActive && scope==='my' ? `<button class="btn btn-primary btn-sm" id="addOwnerBtn" ${atCap?'disabled title="Remove an owner first — active owner limit reached"':''}>${ic('plus')} Add owner</button>` : ''}
+    ${!salesActive && canManageUsers(u) ? `<button class="btn btn-primary btn-sm" id="adminAddOwnerBtn">${ic('plus')} Add owner for a salesperson</button>` : ''}
   </div>
-  ${!salesActive ? `<div id="ownersAdminNote" class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-soft,inherit);">Owners are created by sales users (salespeople and managers) from their own <b>Owners → Add owner</b> page, because every owner belongs to one salesperson and counts toward that person's owner limit. From here you can view every owner of this team and edit them; use <b>Admin</b> → Owner Transfers / Transfer Owner / Available Pool to move or restore owners. To test, add a sales user under <b>Admin → Users → Add sales user</b> and sign in as them.</div>` : ''}
+  ${!salesActive ? `<div id="ownersAdminNote" class="card card-pad" style="margin-bottom:14px; font-size:12.5px; color:var(--text-soft,inherit);">Every owner belongs to one salesperson and counts toward that person's owner limit. Salespeople add their own from <b>Owners → Add owner</b>; Senior and Head Admins can use <b>Add owner for a salesperson</b> below to create one on a salesperson's behalf (it is recorded in the audit log and the salesperson is notified). From here you can also view every owner of this team and edit them; use <b>Admin</b> → Owner Transfers / Transfer Owner / Available Pool to move or restore owners. </div>` : ''}
   ${atCap?`<div class="card card-pad" style="background:var(--warning-tint); border-color:var(--warning); margin-bottom:14px; font-size:12.5px; color:var(--warning);">You're at the ${cap} active owner limit. Remove an existing owner (end all of their relationships) before adding a new one.</div>`:''}
   <div class="card" style="margin-bottom:18px;">
     ${list.length? list.map(o=>ownerCard(o,u,scope)).join('') : emptyRow(scope==='my' ? 'No owners yet — click "Add owner" to create your first one.' : 'No team owners yet.')}
@@ -122,6 +123,7 @@ AFTER_RENDER.owners = function(u){
     await hydrateOwnersAndUnitsFromServer(u);
     toast('Owner removed from your list'); session._expandedOwner=null; renderPageInto(u);
   }));
+  const aab = document.getElementById('adminAddOwnerBtn'); if(aab) aab.addEventListener('click', ()=> openAdminAddOwnerModal(u));
   const ab = document.getElementById('addOwnerBtn'); if(ab) ab.addEventListener('click', ()=> openAddOwnerModal(u));
 };
 
@@ -426,5 +428,42 @@ function openEditOwnerModal(ownerId, u){
     } catch(err){ btn.disabled = false; toast((err&&err.message)||'Could not save changes'); return; }
     await hydrateOwnersAndUnitsFromServer(u);
     closeModal(); toast('Owner updated'); renderPageInto(u);
+  });
+}
+
+/* ---------- Admin: add an owner on behalf of a salesperson (Senior / Head Admin) ----------
+   The server enforces everything (who may do it, active sales user in the SAME team, owner limit of THAT salesperson,
+   duplicate phone rules, audit entry, notification); this form only collects the input and shows the server's answer. */
+function openAdminAddOwnerModal(u){
+  const tk = myTeamKey(u);
+  const cap = DB.ownerCap || 30;
+  const holders = DB.users.filter(x=> x.active!==false && x.team===tk && ['salesperson','teamleader','manager','director'].includes(x.role)).sort((a,b)=>a.name.localeCompare(b.name));
+  openModal(`
+    <div class="modal-head"><div style="font-weight:800;">Add owner for a salesperson — ${tk[0].toUpperCase()+tk.slice(1)}</div><button class="close-x" id="modalCloseX">${ic('x')}</button></div>
+    <div class="modal-body">
+      <div class="section-sub" style="margin-bottom:14px;">The owner will belong to the person you choose, appear in <b>their</b> Owners list only (plus their managers), and count toward <b>their</b> limit of ${cap}. This action is recorded in the audit log and they are notified.</div>
+      <div class="field"><label class="field-label">Salesperson</label>
+        <select id="aow_sp">${holders.length ? `<option value="">— choose —</option>` + holders.map(h=>{ const n = distinctOwnerCountForSalesperson(h.id); return `<option value="${esc(h.id)}" ${n>=cap?'disabled':''}>${esc(h.name)} — ${esc(ROLE_LABELS[h.role])} (${n}/${cap} owners${n>=cap?' — at limit':''})</option>`; }).join('') : '<option value="">No active sales users in this team</option>'}</select></div>
+      <div class="field"><label class="field-label">Owner name</label><input id="aow_name"></div>
+      <div class="field"><label class="field-label">Phone (digits only — 01XXXXXXXXX or 20XXXXXXXXXXX)</label><input id="aow_phone" inputmode="numeric"></div>
+      <div class="field"><label class="field-label">Second phone (optional)</label><input id="aow_phone2" inputmode="numeric"></div>
+      <div id="aow_err" style="color:#B0463F; font-size:12.5px; font-weight:700; min-height:18px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" id="aow_save">Save owner</button></div>`);
+  document.getElementById('modalCloseX').addEventListener('click', closeModal);
+  ['aow_phone','aow_phone2'].forEach(id=> document.getElementById(id).addEventListener('input', e=>{ e.target.value = e.target.value.replace(/[^0-9]/g,''); }));
+  document.getElementById('aow_save').addEventListener('click', async (e)=>{
+    const err = document.getElementById('aow_err');
+    const sp = document.getElementById('aow_sp').value, name = document.getElementById('aow_name').value.trim();
+    const ph = document.getElementById('aow_phone').value.trim(), ph2 = document.getElementById('aow_phone2').value.trim();
+    if(!sp){ err.textContent = 'Choose the salesperson this owner belongs to'; return; }
+    if(!name){ err.textContent = 'Owner name is required'; return; }
+    if(!normalizeEgyptPhone(ph)){ err.textContent = 'Enter a valid Egyptian local (01XXXXXXXXX) or international (20XXXXXXXXXXX) number'; return; }
+    if(ph2 && !normalizeEgyptPhone(ph2)){ err.textContent = 'Second phone is not a valid Egyptian number'; return; }
+    const btn = e.currentTarget; btn.disabled = true; err.textContent = '';
+    try{ await NA1_API.post('/owners', { name, phone: ph, phone2: ph2 || undefined, salespersonId: sp, team: tk }); }
+    catch(ex){ btn.disabled = false; err.textContent = (ex && ex.isNetworkError) ? 'Could not reach the server — the owner was NOT saved.' : ((ex && ex.message) || 'Could not save this owner'); return; }
+    await hydrateOwnersAndUnitsFromServer(u);
+    closeModal(); toast('Owner added for ' + ((DB.users.find(x=>x.id===sp)||{}).name || 'the salesperson')); renderPageInto(u);
   });
 }

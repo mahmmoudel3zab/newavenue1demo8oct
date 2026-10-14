@@ -67,7 +67,3 @@ This release builds on the approved Lumen × Clarity theme. Nothing was redesign
 - `README.md` (new "Start here" section)
 - `setup-windows.cmd`, `start-windows.cmd` (titles)
 - This file
-
----
-## Verification round note
-Only change in this checked copy: `js/session.js` and `js/pages/owners.js` carry the Owners fix (admins see owners that have no unit yet; short explanation note on the Owners page). `js/app-mode.js` is still `'demo'`. Nothing was deployed.
